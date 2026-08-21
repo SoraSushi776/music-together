@@ -85,6 +85,7 @@ const trackSchema = z.object({
   lyricId: z.string().max(200).optional(),
   picId: z.string().max(200).optional(),
   streamUrl: z.string().max(2000).optional(),
+  sourceUrl: z.string().max(2000).optional(),
   vip: z.boolean().optional(),
 })
 

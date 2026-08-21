@@ -3,6 +3,7 @@ import type { Actions, Subjects, VoteAction } from '@music-together/shared'
 import { createWithRoom } from '../middleware/withRoom.js'
 import { checkSocketRateLimit } from '../middleware/socketRateLimiter.js'
 import * as voteService from '../services/voteService.js'
+import * as queueService from '../services/queueService.js'
 import { executeVoteAction } from '../services/voteActionService.js'
 import { logger } from '../utils/logger.js'
 import type { TypedServer, TypedSocket } from '../middleware/types.js'
@@ -44,6 +45,25 @@ export function registerVoteController(io: TypedServer, socket: TypedSocket) {
           roomId: ctx.roomId,
         })
         return
+      }
+
+      // 普通成员移除**自己点选**的歌曲无需发起投票（与 QUEUE_REMOVE 的自助移除规则一致）。
+      // 放在「禁用投票」检查之前：自助删歌不是投票行为，不受禁用投票影响。
+      // 客户端通常直接走 QUEUE_REMOVE；这里是客户端误经 VOTE_START 路由时的安全网。
+      // （特权角色已在上方直接执行分支返回，此处对 member 而言等价于「是否本人点歌」。）
+      if (action === 'remove-track' && typeof votePayload?.trackId === 'string') {
+        const maySelfRemove = queueService.canRemoveTrackWithoutVote(
+          ctx.room,
+          { role: ctx.user.role, nickname: ctx.user.nickname },
+          votePayload.trackId,
+        )
+        if (maySelfRemove) {
+          await executeVoteAction(io, ctx.roomId, action, votePayload)
+          logger.info(`Self-removal executed for ${ctx.user.nickname} (own track, no vote needed)`, {
+            roomId: ctx.roomId,
+          })
+          return
+        }
       }
 
       // 房主/管理员开启“禁用投票”后，普通成员无法发起任何投票（下一首、切换循环等）。

@@ -63,6 +63,8 @@ export interface Track {
   lyricId?: string
   picId?: string
   streamUrl?: string
+  /** 歌曲在来源平台（网易云/QQ音乐/酷狗）网页版的单曲页面链接 */
+  sourceUrl?: string
   /** 是否为 VIP / 付费歌曲（可能无法播放或仅试听） */
   vip?: boolean
   /** 点歌人昵称（服务端在加入队列时注入） */

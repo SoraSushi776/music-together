@@ -1,15 +1,13 @@
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { VirtualTrackList } from '@/components/VirtualTrackList'
-import { trackKey } from '@/lib/utils'
-import { useRoomStore } from '@/stores/roomStore'
+import { useAddQuota, type AddQuotaInfo } from '@/hooks/useAddQuota'
+import { useAddedTracks } from '@/hooks/useAddedTracks'
 import type { Playlist, Track } from '@music-together/shared'
 import { LIMITS } from '@music-together/shared'
 import { ArrowLeft, ListPlus, Music } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
-
-const EMPTY_QUEUE: Track[] = []
 
 interface PlaylistDetailProps {
   playlist: Playlist | null
@@ -23,6 +21,8 @@ interface PlaylistDetailProps {
   onInsertAfterCurrent?: (track: Track) => void
   onAddAll: (tracks: Track[], playlistName?: string) => void
   onLoadMore: () => void
+  /** Add gating (queue full / per-listener quota) shared with the parent dialog. */
+  addQuota?: AddQuotaInfo
 }
 
 export function PlaylistDetail({
@@ -37,66 +37,55 @@ export function PlaylistDetail({
   onInsertAfterCurrent,
   onAddAll,
   onLoadMore,
+  addQuota,
 }: PlaylistDetailProps) {
-  const queue = useRoomStore((s) => s.room?.queue ?? EMPTY_QUEUE)
-  const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
-  const queueKeys = useMemo(() => new Set(queue.map(trackKey)), [queue])
-
-  const isTrackAdded = useCallback(
-    (track: Track) => {
-      const key = trackKey(track)
-      return addedIds.has(key) || queueKeys.has(key)
-    },
-    [addedIds, queueKeys],
-  )
+  const { queue, markPending, isTrackAdded, isInQueue } = useAddedTracks()
+  const fallbackQuota = useAddQuota()
+  const quota = addQuota ?? fallbackQuota
 
   const handleAddTrack = useCallback(
     (track: Track) => {
-      const key = trackKey(track)
-      if (queueKeys.has(key) || addedIds.has(key)) {
+      if (isInQueue(track) || isTrackAdded(track)) {
         toast.info(`「${track.title}」已在队列中`)
         return
       }
       onAddTrack(track)
-      setAddedIds((prev) => new Set(prev).add(key))
+      markPending([track])
     },
-    [onAddTrack, queueKeys, addedIds],
+    [onAddTrack, isInQueue, isTrackAdded, markPending],
   )
 
   const handleInsertAfterCurrent = useCallback(
     (track: Track) => {
-      const key = trackKey(track)
-      if (queueKeys.has(key) || addedIds.has(key)) {
+      if (isInQueue(track) || isTrackAdded(track)) {
         toast.info(`「${track.title}」已在队列中`)
         return
       }
       onInsertAfterCurrent?.(track)
-      setAddedIds((prev) => new Set(prev).add(key))
+      markPending([track])
     },
-    [onInsertAfterCurrent, queueKeys, addedIds],
+    [onInsertAfterCurrent, isInQueue, isTrackAdded, markPending],
   )
 
-  // Dynamic "add all" logic — filter duplicates
+  // Dynamic "add all" logic — filter duplicates, cap by queue size and per-listener quota
   const availableSlots = LIMITS.QUEUE_MAX_SIZE - queue.length
   const uniqueTracks = useMemo(() => tracks.filter((t) => !isTrackAdded(t)), [tracks, isTrackAdded])
-  const addCount = Math.min(availableSlots, uniqueTracks.length)
+  const addCount = Math.min(availableSlots, uniqueTracks.length, quota.remaining ?? Number.POSITIVE_INFINITY)
   const isQueueFull = availableSlots <= 0
+  const isQuotaReached = !!quota.disabledReason
+  const isAddAllDisabled = loading || isQueueFull || isQuotaReached || uniqueTracks.length === 0
 
   const handleAddAll = useCallback(() => {
     if (addCount <= 0) return
     const toAdd = uniqueTracks.slice(0, addCount)
     onAddAll(toAdd, playlist?.name)
-    setAddedIds((prev) => {
-      const next = new Set(prev)
-      for (const t of toAdd) next.add(trackKey(t))
-      return next
-    })
+    markPending(toAdd)
     if (addCount < uniqueTracks.length) {
-      toast.success(`已添加 ${addCount} 首到队列（队列已满，还有 ${uniqueTracks.length - addCount} 首未添加）`)
+      toast.success(`已添加 ${addCount} 首到队列（已达上限，还有 ${uniqueTracks.length - addCount} 首未添加）`)
     } else {
       toast.success(`已添加全部 ${addCount} 首到队列`)
     }
-  }, [addCount, uniqueTracks, onAddAll, playlist?.name])
+  }, [addCount, uniqueTracks, onAddAll, playlist?.name, markPending])
 
   // Button label
   let addAllLabel: string
@@ -106,6 +95,8 @@ export function PlaylistDetail({
     addAllLabel = '添加全部'
   } else if (isQueueFull) {
     addAllLabel = '队列已满'
+  } else if (isQuotaReached) {
+    addAllLabel = '已达点歌上限'
   } else if (uniqueTracks.length === 0) {
     addAllLabel = '全部已添加'
   } else if (addCount === uniqueTracks.length) {
@@ -135,7 +126,8 @@ export function PlaylistDetail({
           variant="outline"
           size="sm"
           onClick={handleAddAll}
-          disabled={loading || isQueueFull || uniqueTracks.length === 0}
+          disabled={isAddAllDisabled}
+          title={isAddAllDisabled && quota.disabledReason ? quota.disabledReason : undefined}
           className="shrink-0 gap-1"
         >
           <ListPlus className="h-3.5 w-3.5" />
@@ -153,6 +145,7 @@ export function PlaylistDetail({
         loadingMore={loadingMore}
         onLoadMore={onLoadMore}
         isTrackAdded={isTrackAdded}
+        addDisabledReason={quota.disabledReason}
         onAddTrack={handleAddTrack}
         onInsertAfterCurrent={onInsertAfterCurrent ? handleInsertAfterCurrent : undefined}
         emptyIcon={<Music className="h-8 w-8" />}

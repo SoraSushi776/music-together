@@ -10,6 +10,7 @@ import {
 import type { Track } from '@music-together/shared'
 import type { TypedServer, TypedSocket } from '../middleware/types.js'
 import { createWithPermission } from '../middleware/withControl.js'
+import { createWithRoom } from '../middleware/withRoom.js'
 import { checkSocketRateLimit } from '../middleware/socketRateLimiter.js'
 import * as chatService from '../services/chatService.js'
 import * as playerService from '../services/playerService.js'
@@ -30,6 +31,7 @@ function mapQueueAddError(result: Exclude<AddResult, 'added'>): { code: string; 
 
 export function registerQueueController(io: TypedServer, socket: TypedSocket) {
   const withPermission = createWithPermission(io)
+  const withRoom = createWithRoom(io)
 
   socket.on(
     EVENTS.QUEUE_ADD,
@@ -65,7 +67,10 @@ export function registerQueueController(io: TypedServer, socket: TypedSocket) {
 
   socket.on(
     EVENTS.QUEUE_INSERT_AFTER_CURRENT,
-    withPermission('add', 'Queue', async (ctx, raw) => {
+    // Inserting after the current track is a queue-jump (reorder semantics):
+    // restricted to privileged roles (owner/admin), consistent with QUEUE_REORDER.
+    // Members keep the plain QUEUE_ADD permission only.
+    withPermission('reorder', 'Queue', async (ctx, raw) => {
       if (!(await checkSocketRateLimit(ctx.socket))) return
       const parsed = queueInsertAfterCurrentSchema.safeParse(raw)
       if (!parsed.success) {
@@ -129,13 +134,26 @@ export function registerQueueController(io: TypedServer, socket: TypedSocket) {
 
   socket.on(
     EVENTS.QUEUE_REMOVE,
-    withPermission('remove', 'Queue', async (ctx, raw) => {
+    // 移除权限：特权角色（房主/管理员）可移除任意歌曲；
+    // 普通成员可移除**自己点选**的歌曲（requestedBy 与其昵称一致），无需发起投票。
+    withRoom(async (ctx, raw) => {
       const parsed = queueRemoveSchema.safeParse(raw)
       if (!parsed.success) {
         socket.emit(EVENTS.ROOM_ERROR, { code: ERROR_CODE.INVALID_DATA, message: '无效的移除请求' })
         return
       }
       const { trackId } = parsed.data
+
+      // 移除权限：特权角色（房主/管理员）可移除任意歌曲；
+      // 普通成员可移除**自己点选**的歌曲（requestedBy 与其昵称一致），无需发起投票。
+      if (!queueService.canRemoveTrackWithoutVote(ctx.room, { role: ctx.user.role, nickname: ctx.user.nickname }, trackId)) {
+        socket.emit(EVENTS.ROOM_ERROR, {
+          code: ERROR_CODE.NO_PERMISSION,
+          message: '你没有权限移除这首歌，可发起投票移除',
+        })
+        return
+      }
+
       const effectiveTrack = ctx.room.pendingPlayback?.track ?? ctx.room.currentTrack
       const isCurrentTrack = effectiveTrack?.id === trackId
       const successor = isCurrentTrack ? queueService.getSuccessorAfterRemoval(ctx.roomId, trackId, ctx.room.playMode) : null

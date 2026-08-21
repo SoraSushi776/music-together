@@ -3,8 +3,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Slider } from '@/components/ui/slider'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { MarqueeText } from '@/components/ui/marquee-text'
+import { PLATFORM_SHORT_LABELS } from '@/lib/platform'
 import { usePlayerStore } from '@/stores/playerStore'
-import { MessageSquare, Volume2, VolumeX } from 'lucide-react'
+import { ExternalLink, MessageSquare, Volume2, VolumeX } from 'lucide-react'
 import { motion } from 'motion/react'
 import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { LAYOUT_TRANSITION, SPRING } from './constants'
@@ -122,9 +123,33 @@ export const SongInfoBar = memo(function SongInfoBar({ onOpenChat, chatUnreadCou
           )}
         </motion.div>
 
-        {/* Right-bottom: volume + chat buttons (always visible, aligned to bottom) */}
+        {/* Right-bottom: volume + platform link + chat buttons (always visible, aligned to bottom) */}
         <div className="flex shrink-0 items-center">
           <VolumeControl volume={volume} setVolume={setVolume} toggleMute={toggleMute} />
+          {currentTrack?.sourceUrl && (
+            <Tooltip delayDuration={300}>
+              <TooltipTrigger asChild>
+                <motion.div whileTap={{ scale: 0.9 }}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 text-white/70 hover:bg-white/10"
+                    asChild
+                  >
+                    <a
+                      href={currentTrack.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`前往${PLATFORM_SHORT_LABELS[currentTrack.source]}查看这首歌`}
+                    >
+                      <ExternalLink className="size-5" />
+                    </a>
+                  </Button>
+                </motion.div>
+              </TooltipTrigger>
+              <TooltipContent>前往{PLATFORM_SHORT_LABELS[currentTrack.source]}</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <motion.div whileTap={{ scale: 0.9 }}>

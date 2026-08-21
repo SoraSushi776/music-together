@@ -10,20 +10,20 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { VirtualTrackList, type VirtualTrackListRef } from '@/components/VirtualTrackList'
 import { PLATFORM_ACTIVE, PLATFORM_TEXT } from '@/lib/platform'
-import { cn, trackKey } from '@/lib/utils'
-import { useRoomStore } from '@/stores/roomStore'
+import { cn } from '@/lib/utils'
+import { useAddQuota } from '@/hooks/useAddQuota'
+import { useAddedTracks } from '@/hooks/useAddedTracks'
 import { useSearch } from '@/hooks/useSearch'
 import { usePlaylist } from '@/hooks/usePlaylist'
 import { useSocketContext } from '@/providers/SocketProvider'
+import { useAppAbility } from '@/providers/AbilityProvider'
 import { EVENTS } from '@music-together/shared'
 import type { MusicSource, Track, Playlist } from '@music-together/shared'
 import { Loader2, Music2, Search, ListMusic } from 'lucide-react'
 import { motion } from 'motion/react'
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, useEffect } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { PlaylistDetail } from './Settings/PlaylistDetail'
-
-const EMPTY_QUEUE: Track[] = []
 
 const SOURCES: { id: MusicSource; label: string }[] = [
   { id: 'netease', label: '网易云' },
@@ -42,13 +42,15 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
   const [source, setSource] = useState<MusicSource>('netease')
   const [searchType, setSearchType] = useState<'song' | 'album' | 'playlist'>('song')
   const [keyword, setKeyword] = useState('')
-  const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
   const listRef = useRef<VirtualTrackListRef>(null)
   const sourceContainerRef = useRef<HTMLDivElement>(null)
   const [pillStyle, setPillStyle] = useState({ left: 0, width: 0 })
-  const queue = useRoomStore((s) => s.room?.queue ?? EMPTY_QUEUE)
-  const queueKeys = useMemo(() => new Set(queue.map(trackKey)), [queue])
+  const { markPending, reset, isTrackAdded, isInQueue } = useAddedTracks()
+  const quota = useAddQuota()
   const { socket } = useSocketContext()
+  // Insert-after-current (置顶) is a queue-jump restricted to privileged roles
+  // (owner/admin); members only see the plain add button.
+  const canInsertAfterCurrent = useAppAbility().can('reorder', 'Queue')
 
   // Album Detail view state
   const [selectedAlbum, setSelectedAlbum] = useState<Playlist | null>(null)
@@ -73,11 +75,11 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
     prevSourceRef.current = source
     prevTypeRef.current = searchType
     if ((sourceChanged || typeChanged) && keyword.trim()) {
-      setAddedIds(new Set())
+      reset()
       search(keyword.trim())
       if (searchType === 'song') listRef.current?.scrollToTop()
     }
-  }, [source, searchType, keyword, search])
+  }, [source, searchType, keyword, search, reset])
 
   // Measure active source button position for sliding pill
   const measurePill = useCallback(() => {
@@ -106,7 +108,7 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
     const searchKeyword = (overrideKeyword ?? keyword).trim()
     if (!searchKeyword) return
     if (overrideKeyword !== undefined) setKeyword(overrideKeyword)
-    setAddedIds(new Set())
+    reset()
     search(searchKeyword)
     if (searchType === 'song') {
       listRef.current?.scrollToTop()
@@ -115,53 +117,39 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
 
   const handleAdd = useCallback(
     (track: Track) => {
-      const key = trackKey(track)
-      if (queueKeys.has(key) || addedIds.has(key)) {
+      if (isInQueue(track) || isTrackAdded(track)) {
         toast.info(`「${track.title}」已在队列中`)
         return
       }
       onAddToQueue(track)
-      setAddedIds((prev) => new Set(prev).add(key))
-      // Removed duplicate toast.success since onAddToQueue (from useQueue) usually already handles it 
+      markPending([track])
+      // Removed duplicate toast.success since onAddToQueue (from useQueue) usually already handles it
       // or the UI handles feedback.
     },
-    [onAddToQueue, queueKeys, addedIds],
+    [onAddToQueue, isInQueue, isTrackAdded, markPending],
   )
 
   const handleInsertAfterCurrent = useCallback(
     (track: Track) => {
-      const key = trackKey(track)
-      if (queueKeys.has(key) || addedIds.has(key)) {
+      if (isInQueue(track) || isTrackAdded(track)) {
         toast.info(`「${track.title}」已在队列中`)
         return
       }
       onInsertAfterCurrent(track)
-      setAddedIds((prev) => new Set(prev).add(key))
+      markPending([track])
       // Removed duplicate toast.success
     },
-    [onInsertAfterCurrent, queueKeys, addedIds],
+    [onInsertAfterCurrent, isInQueue, isTrackAdded, markPending],
   )
 
   const handleAddBatch = useCallback(
     (tracks: Track[], playlistName?: string) => {
       if (tracks.length === 0) return
       socket.emit(EVENTS.QUEUE_ADD_BATCH, { tracks, playlistName })
-      setAddedIds((prev) => {
-        const next = new Set(prev)
-        for (const t of tracks) next.add(trackKey(t))
-        return next
-      })
+      markPending(tracks)
       toast.success(`已添加 ${tracks.length} 首歌曲`)
     },
-    [socket]
-  )
-
-  const isTrackAdded = useCallback(
-    (track: Track) => {
-      const key = trackKey(track)
-      return addedIds.has(key) || queueKeys.has(key)
-    },
-    [addedIds, queueKeys],
+    [socket, markPending],
   )
 
   const handleSelectAlbum = (album: Playlist) => {
@@ -195,7 +183,7 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
                     onClick={() => {
                       setSource(s.id)
                       resetState()
-                      setAddedIds(new Set())
+                      reset()
                     }}
                   >
                     {s.label}
@@ -217,9 +205,10 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
               total={playlistTotal}
               onBack={() => setSelectedAlbum(null)}
               onAddTrack={handleAdd}
-              onInsertAfterCurrent={handleInsertAfterCurrent}
+              onInsertAfterCurrent={canInsertAfterCurrent ? handleInsertAfterCurrent : undefined}
               onAddAll={handleAddBatch}
               onLoadMore={loadMoreTracks}
+              addQuota={quota}
             />
           ) : (
             <>
@@ -229,7 +218,7 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
                 onValueChange={(v) => {
                   setSearchType(v as 'song' | 'album' | 'playlist')
                   resetState()
-                  setAddedIds(new Set())
+                  reset()
                 }}
               >
                 <TabsList className="w-full">
@@ -266,8 +255,9 @@ export function SearchDialog({ open, onOpenChange, onAddToQueue, onInsertAfterCu
                     loadingMore={loadingMore}
                     onLoadMore={loadMore}
                     isTrackAdded={isTrackAdded}
+                    addDisabledReason={quota.disabledReason}
                     onAddTrack={handleAdd}
-                    onInsertAfterCurrent={handleInsertAfterCurrent}
+                    onInsertAfterCurrent={canInsertAfterCurrent ? handleInsertAfterCurrent : undefined}
                     onArtistClick={(artist) => {
                       setSearchType('song')
                       handleSearch(artist)

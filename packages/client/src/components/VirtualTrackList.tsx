@@ -16,6 +16,8 @@ export interface VirtualTrackListProps {
   loadingMore: boolean
   onLoadMore: () => void
   isTrackAdded: (track: Track) => boolean
+  /** When set: keep + buttons visible but disabled (e.g. per-listener quota reached). */
+  addDisabledReason?: string
   onAddTrack: (track: Track) => void
   onInsertAfterCurrent?: (track: Track) => void
   onArtistClick?: (artist: string) => void
@@ -52,6 +54,7 @@ export const VirtualTrackList = forwardRef<VirtualTrackListRef, VirtualTrackList
     loadingMore,
     onLoadMore,
     isTrackAdded,
+    addDisabledReason,
     onAddTrack,
     onInsertAfterCurrent,
     onArtistClick,
@@ -157,6 +160,7 @@ export const VirtualTrackList = forwardRef<VirtualTrackListRef, VirtualTrackList
               track={track}
               index={virtualRow.index}
               isAdded={isTrackAdded(track)}
+              addDisabledReason={addDisabledReason}
               onAdd={onAddTrack}
               onInsertAfterCurrent={onInsertAfterCurrent}
               onArtistClick={onArtistClick}

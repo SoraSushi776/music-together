@@ -43,7 +43,7 @@ graph TB
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Room**     | `room:create`, `room:join`, `room:leave`, `room:list`, `room:settings`, `room:set_role`                                             | `room:created`, `room:state`, `room:user_joined`, `room:user_left`, `room:settings`, `room:error`, `room:list_update`, `room:role_changed` |
 | **Player**   | `player:play`, `player:pause`, `player:seek`, `player:next`, `player:prev`, `player:sync`, `player:sync_request`, `player:set_mode` | `player:play`, `player:pause`, `player:resume`, `player:seek`, `player:sync_response`                                                      |
-| **Queue**    | `queue:add`, `queue:add_batch`, `queue:remove`, `queue:reorder`, `queue:shuffle`, `queue:clear`                                     | `queue:updated`                                                                                                                            |
+| **Queue**    | `queue:add`, `queue:add_batch`, `queue:insert_after_current`, `queue:remove`, `queue:reorder`, `queue:shuffle`, `queue:clear`        | `queue:updated`                                                                                                                             |
 | **Chat**     | `chat:message`                                                                                                                      | `chat:message`, `chat:history`                                                                                                             |
 | **Vote**     | `vote:start`, `vote:cast`                                                                                                           | `vote:started`, `vote:result`                                                                                                              |
 | **Auth**     | `auth:request_qr`, `auth:check_qr`, `auth:set_cookie`, `auth:logout`, `auth:get_status`                                             | `auth:qr_generated`, `auth:qr_status`, `auth:set_cookie_result`, `auth:status_update`, `auth:my_status`                                    |
@@ -67,6 +67,7 @@ interface Track {
   lyricId?: string
   picId?: string
   streamUrl?: string
+  sourceUrl?: string // 歌曲在来源平台网页版的单曲页面链接（播放器「前往平台」按钮使用）
   requestedBy?: string // 点歌人昵称
   vip?: boolean // 是否为 VIP / 付费歌曲（可能无法播放或仅试听）
 }
@@ -137,6 +138,22 @@ interface ChatMessage {
   type: 'user' | 'system'
 }
 ```
+
+### `sourceUrl` 生成规则
+
+`Track.sourceUrl` 由服务端 `musicProvider.ts` 的 `buildTrackSourceUrl(source, sourceId, searchKeyword)` 在曲目入队时生成，播放器右下角「前往平台」按钮据此跳转：
+
+| 来源 | URL 规则 | 说明 |
+| --- | --- | --- |
+| 网易云 | `https://music.163.com/song?id={sourceId}` | sourceId 即歌曲数字 id，直达单曲页 |
+| QQ 音乐 | `https://y.qq.com/n/ryqq/songDetail/{sourceId}` | sourceId 即歌曲 mid，直达单曲页 |
+| 酷狗 | `https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord={标题}` | 无稳定 hash 直链（mixsong 页面的 base62 id 搜索接口不返回、数字 album_audio_id 会 302 回首页），兜底跳搜索页；无标题时不生成 sourceUrl |
+
+注意事项：
+
+- 客户端仅在 `currentTrack.sourceUrl` 存在时显示按钮，因此该字段缺失不影响旧数据
+- **新增 Track 字段必须同步加入 `packages/shared/src/schemas.ts` 的 `trackSchema`**，否则 Zod 校验会静默剥离该字段（QUEUE_ADD 后 sourceUrl 丢失）
+- 该改动上线前已入队的旧曲目没有 sourceUrl，重新点歌后才会带上
 
 ## 播放同步机制
 
@@ -247,15 +264,27 @@ Conductor（当前 `hostId` 对应用户）**自适应频率**上报当前播放
 - 对应房间字段 `room.maxSongsPerUser`（默认 `0`，即不限制、上不封顶），通过 `room:settings` 事件由房主写入，并随 `room:state` / `room:settings` 下发全部成员。
 - **0 = 不限制**（上不封顶）；正整数 `N` 表示同一位听众在队列中同时占用的歌曲数不得超过 `N` 首。
 - 计数维度为 `Track.requestedBy`（点歌人昵称，与服务端 `interleaveByRequester` 公平排序使用同一标识）：新增歌曲时，服务端统计队列中 `requestedBy` 与待加歌曲相同者已有数量，达到 `N` 即拒绝。
+- **只统计「未播部分」**：队列是播放列表语义，已播完的歌会一直留在队列中，因此配额只统计当前播放曲目（含已调度的 `pendingPlayback` 曲目）**之后**的未播歌曲；已播完和在播的歌曲不占用配额（否则用户的歌唱完后必须手动删歌才能继续点歌）。全局 `QUEUE_MAX_SIZE` 仍然约束整个队列（含已播条目）。
 - **生效入口**：`queueService.addTrack`（点歌）、`insertAfterCurrent`（置顶/插入当前曲后）、`addBatchTracks`（歌单批量导入）均在落库前检查该配额。批量导入会尽量加入，但最多加到「剩余配额」为止（先受 `QUEUE_MAX_SIZE` 约束，再受 `maxSongsPerUser` 约束）。
+- **置顶权限（仅特权角色）**：`queue:insert_after_current`（置顶到当前播放下方）本质是插队（reorder 语义），服务端使用 `withPermission('reorder', 'Queue')` 校验——仅 owner/admin 可用，与拖拽排序同级；普通成员只有 `queue:add`（普通点歌）。客户端在 `SearchDialog` / `PlatformHub` 中以 `useAppAbility().can('reorder', 'Queue')` 门控，非特权角色不渲染置顶按钮（与 QueueDrawer 的 canReorder 模式一致）。
 - 超过上限时服务端返回 `USER_QUEUE_LIMIT` 错误（提示「你已点选过多歌曲，请等待播放后再点歌」）；队列满则返回 `QUEUE_FULL`。
 - 该限制对所有用户（含房主/管理员）一致生效，是一项队列 fairness 限制而非权限限制；`requestedBy` 为昵称维度，重名或改名可能被视为同一人。
+- **免投票自助删歌**：普通成员可移除**自己点选**的歌曲（`Track.requestedBy` 与其当前昵称一致），无需发起投票，也不受「禁用投票」限制（自助删歌不是投票行为）。规则由 `queueService.canRemoveTrackWithoutVote(room, user, trackId)` 统一实现，`QUEUE_REMOVE` 事件与 `VOTE_START`（remove-track 安全网）两处复用；他人点选的歌曲仍需走投票（或由房主/管理员直接移除）。
+- **客户端预判禁用**：搜索点歌 / 歌单详情的「+」按钮在达到个人配额（或队列满）时直接禁用（保留 + 图标、tooltip 提示原因），而不是等点击后服务端拒绝。客户端配额逻辑在 `packages/client/src/lib/quota.ts`（`useAddQuota` hook 消费），与服务端「只统计未播部分」语义一致；客户端可见的边界为 `currentTrack`（`pendingPlayback` 不会序列化下发，属可接受的短暂误差），服务端仍是权威判定。
+- **添加状态自愈**：点歌按钮的「已添加 ✓」状态以队列成员关系为事实来源（`useAddedTracks` hook）；本地 `pendingIds` 仅提供即时乐观反馈与防双击，一旦收到任何 `QUEUE_UPDATED` 或 `ROOM_ERROR`，未真正落入队列的 key 会被自动清除——添加失败（超上限/队列满）后按钮自动恢复可用，不会再出现「卡死对勾」。
 
 - 音质切换仅对**下一首歌**生效，当前播放不中断
 - 服务端 `playerService.playTrackInRoom()` 从 `room.audioQuality` 读取 bitrate，通过 `resolveStreamUrl()` 请求流 URL
 - **降级策略**：如果请求的 bitrate 获取不到（VIP 限制或平台不支持），自动逐级降低 bitrate 重试（999 → 320 → 192 → 128）
 - 三个平台（netease / tencent / kugou）统一使用同一 bitrate 参数，Meting 内部处理各平台差异
 - `musicProvider.streamUrlCache` 的 key 包含 bitrate，不同音质自动隔离缓存
+
+## 听客离开自动移除点播歌曲
+
+- 当用户真正离开房间（主动 `room:leave`、断线、或 create/join 前的 auto-leave）且房间仍有其他成员时，服务端自动将其**未播部分**的点播歌曲从队列移除，并广播 `QUEUE_UPDATED` + 一条系统消息（「XX 离开了房间，其点播的 N 首歌曲已从队列移除」）。
+- 移除边界与 `maxSongsPerUser` 配额一致（`queueService.removeTracksByRequester(roomId, nickname)`）：只移除当前播放曲目（含已调度的 `pendingPlayback` 曲目）**之后**、`Track.requestedBy` 与离开者昵称一致的歌曲；已播历史、在播歌曲和已调度歌曲保留，不打断进行中的播放。
+- 例外场景不触发移除：`staleSocketOnly`（多标签页/刷新时旧 socket 断开但新 socket 仍在房间，用户未真正离开）；离开后房间为空（房间进入删除宽限期，且独享用户刷新页面重连不应丢失自己的队列）。
+- 身份维度与自助删歌/配额相同，为 `requestedBy` 昵称匹配。
 
 ## 队列清空
 

@@ -9,6 +9,27 @@ import { getKrcByHash, type KrcInfo } from './kugouLyricService.js'
 import * as tencentAuth from './tencentAuthService.js'
 import { logger } from '../utils/logger.js'
 
+/**
+ * Build the web-player page URL for a track on its source platform.
+ * - netease: numeric song id → music.163.com song page
+ * - tencent: song mid → y.qq.com songDetail page
+ * - kugou: we only store the file hash and the web song page is keyed by an
+ *   unrelated mixsong id, so fall back to the search page with the song
+ *   title (the first result is virtually always the song itself)
+ */
+export function buildTrackSourceUrl(source: MusicSource, id: string, searchKeyword?: string): string | undefined {
+  switch (source) {
+    case 'netease':
+      return `https://music.163.com/song?id=${id}`
+    case 'tencent':
+      return `https://y.qq.com/n/ryqq/songDetail/${id}`
+    case 'kugou':
+      return searchKeyword
+        ? `https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord=${encodeURIComponent(searchKeyword)}`
+        : undefined
+  }
+}
+
 /** AMLL LyricLine 格式（与 @applemusic-like-lyrics/core 一致，避免引入 client 依赖） */
 interface AmllLyricLine {
   words: Array<{ word: string; startTime: number; endTime: number; romanWord: string; obscene: boolean }>
@@ -312,7 +333,10 @@ class MusicProvider {
       const { id: _id, requestedBy: _rb, ...meta } = t
       if (meta.cover) meta.thumbnailCover = deriveThumbnailCoverUrl(meta.source, meta.cover)
       if (existing) {
+        // Spread meta first so NEW fields introduced later (e.g. sourceUrl)
+        // are carried over even when `existing` predates them.
         const merged: TrackMeta = {
+          ...meta,
           ...existing,
           cover: existing.cover || meta.cover,
           thumbnailCover: existing.cover
@@ -419,6 +443,7 @@ class MusicProvider {
         urlId: song.mid,
         lyricId: song.mid,
         picId: song.album?.mid || '',
+        sourceUrl: buildTrackSourceUrl('tencent', song.mid),
         // VIP 判断: pay_month=1 月度会员, pay_down=1 付费下载, msgpay>0 VIP 标志
         vip: song.pay?.pay_month === 1 || song.pay?.pay_down === 1 || (song.action?.msgpay ?? 0) > 0,
       }))
@@ -1194,6 +1219,7 @@ class MusicProvider {
       lyricId: hash,
       urlId: hash,
       picId: hash,
+      sourceUrl: buildTrackSourceUrl('kugou', hash, title),
       vip: isVip,
     }
   }
@@ -1333,6 +1359,7 @@ class MusicProvider {
           urlId: String(s.id),
           lyricId: String(s.id),
           picId: String(s.al?.pic_str || s.al?.pic || ''),
+          sourceUrl: buildTrackSourceUrl('netease', String(s.id)),
           // fee: 0=免费, 1=VIP, 4=付费专辑, 8=低音质免费
           vip: s.fee === 1 || s.fee === 4 || s.privilege?.fee === 1 || s.privilege?.fee === 4,
         }
@@ -1353,6 +1380,7 @@ class MusicProvider {
           urlId: String(t.mid),
           lyricId: String(t.mid),
           picId: String(t.album?.mid || ''),
+          sourceUrl: buildTrackSourceUrl('tencent', String(t.mid)),
           // pay.pay_play=1 表示需要 VIP, pay.pay_month=1 表示月度VIP, pay.price_track>0 表示付费单曲
           vip: t.pay?.pay_play === 1 || t.pay?.pay_month === 1 || (t.pay?.price_track ?? 0) > 0,
         }
@@ -1383,6 +1411,7 @@ class MusicProvider {
           urlId: String(s.hash),
           lyricId: String(s.hash),
           picId: String(s.hash),
+          sourceUrl: buildTrackSourceUrl('kugou', String(s.hash), trackName),
           // privilege 位掩码: & 8 表示 VIP; pay_type > 0 也表示付费
           vip: ((s.privilege ?? 0) & 8) !== 0 || (s.pay_type ?? 0) > 0,
         }

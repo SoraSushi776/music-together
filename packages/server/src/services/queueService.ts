@@ -1,26 +1,57 @@
-import type { PlayMode, Track } from '@music-together/shared'
-import { LIMITS } from '@music-together/shared'
+import type { PlayMode, Track, UserRole } from '@music-together/shared'
+import { LIMITS, defineAbilityFor } from '@music-together/shared'
 import { roomRepo } from '../repositories/roomRepository.js'
+import type { RoomData } from '../repositories/types.js'
 
 /** Result of a single-track queue add attempt. */
 export type AddResult = 'added' | 'queue-full' | 'user-limit'
 
 /**
- * How many tracks in the queue were requested by `requester`.
+ * The not-yet-played part of the queue. The queue keeps played tracks
+ * (playlist semantics — `getNextTrack` advances by index and never prunes),
+ * so "upcoming" is everything positioned strictly after the effective
+ * current track (a scheduled `pendingPlayback` track if present, else
+ * `currentTrack`). When nothing is playing, the whole queue is upcoming.
+ */
+function upcomingTracks(
+  room: Pick<RoomData, 'queue' | 'currentTrack'> & { pendingPlayback?: RoomData['pendingPlayback'] },
+): Track[] {
+  const effective = room.pendingPlayback?.track ?? room.currentTrack
+  if (!effective) return room.queue
+  const index = room.queue.findIndex((t) => t.id === effective.id)
+  if (index < 0) return room.queue
+  return room.queue.slice(index + 1)
+}
+
+/**
+ * How many *upcoming* (not yet played) tracks were requested by `requester`.
  * `requestedBy` is the nickName injected by the server when a user adds a song,
  * which is the same key used by `interleaveByRequester` for fairness ordering.
+ *
+ * Played tracks and the currently playing track do NOT occupy the per-listener
+ * quota — otherwise a listener whose songs all finished could never add new
+ * ones without deleting the old entries first.
  */
-function countTracksByRequester(room: { queue: Track[] }, requester: string | undefined): number {
+function countTracksByRequester(
+  room: Pick<RoomData, 'queue' | 'currentTrack'> & { pendingPlayback?: RoomData['pendingPlayback'] },
+  requester: string | undefined,
+): number {
   if (!requester) return 0
-  return room.queue.filter((t) => t.requestedBy === requester).length
+  return upcomingTracks(room).filter((t) => t.requestedBy === requester).length
 }
 
 /**
  * Whether adding one more track for `requester` would exceed the room's
  * per-listener quota. Returns the concrete failure reason, or null if allowed.
+ *
+ * Note: the per-listener quota only counts upcoming tracks (see
+ * `countTracksByRequester`), while the global QUEUE_MAX_SIZE applies to the
+ * whole queue including already-played entries.
  */
 function checkAddQuota(
-  room: { queue: Track[]; maxSongsPerUser: number },
+  room: Pick<RoomData, 'queue' | 'currentTrack' | 'maxSongsPerUser'> & {
+    pendingPlayback?: RoomData['pendingPlayback']
+  },
   requester: string | undefined,
 ): Exclude<AddResult, 'added'> | null {
   if (room.queue.length >= LIMITS.QUEUE_MAX_SIZE) return 'queue-full'
@@ -90,6 +121,56 @@ export function removeTrack(roomId: string, trackId: string): void {
   if (room) {
     room.queue = room.queue.filter((t) => t.id !== trackId)
   }
+}
+
+/**
+ * Remove all *upcoming* tracks requested by `requester` — used when a listener
+ * leaves the room so their queued songs no longer occupy the playlist.
+ *
+ * The played/unplayed boundary matches the per-listener quota
+ * (`countTracksByRequester`): played tracks, the currently playing track and a
+ * scheduled `pendingPlayback` track are kept, so playlist history and
+ * in-flight playback are not disrupted.
+ *
+ * @returns the tracks that were actually removed (empty array = nothing matched).
+ */
+export function removeTracksByRequester(roomId: string, requester: string | undefined): Track[] {
+  if (!requester) return []
+  const room = roomRepo.get(roomId)
+  if (!room) return []
+
+  const effective = room.pendingPlayback?.track ?? room.currentTrack
+  // -1 when nothing is playing (or the effective track is missing from the
+  // queue): everything is upcoming, mirroring `upcomingTracks`.
+  const boundaryIndex = effective ? room.queue.findIndex((t) => t.id === effective.id) : -1
+
+  const removed: Track[] = []
+  const kept: Track[] = []
+  room.queue.forEach((track, index) => {
+    if (index > boundaryIndex && track.requestedBy === requester) removed.push(track)
+    else kept.push(track)
+  })
+  if (removed.length === 0) return []
+
+  room.queue = kept
+  return removed
+}
+
+/**
+ * Whether `user` may remove the track with `trackId` from the queue WITHOUT a
+ * vote. Privileged roles (owner/admin — CASL `remove` on `Queue`) may remove
+ * any track; ordinary members may remove only tracks they requested
+ * themselves (`requestedBy` nickname match, the same identity dimension the
+ * per-listener quota uses).
+ */
+export function canRemoveTrackWithoutVote(
+  room: Pick<RoomData, 'queue'>,
+  user: { role: UserRole; nickname: string },
+  trackId: string,
+): boolean {
+  if (defineAbilityFor(user.role).can('remove', 'Queue')) return true
+  const target = room.queue.find((t) => t.id === trackId)
+  return !!target?.requestedBy && target.requestedBy === user.nickname
 }
 
 /** Resolve the track that should follow a removed current item, using the queue before removal. */

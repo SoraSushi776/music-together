@@ -10,6 +10,8 @@ export interface TrackListItemProps {
   track: Track
   index: number
   isAdded: boolean
+  /** When set (and not already added): keep the + button visible but disabled, tooltip shows the reason. */
+  addDisabledReason?: string
   onAdd: (track: Track) => void
   onInsertAfterCurrent?: (track: Track) => void
   onArtistClick?: (artist: string) => void
@@ -21,12 +23,14 @@ export const TrackListItem = memo(function TrackListItem({
   track,
   index,
   isAdded,
+  addDisabledReason,
   onAdd,
   onInsertAfterCurrent,
   onArtistClick,
   style,
   className,
 }: TrackListItemProps) {
+  const addDisabled = !isAdded && !!addDisabledReason
   return (
     <div
       style={style}
@@ -86,18 +90,22 @@ export const TrackListItem = memo(function TrackListItem({
             <Button
               variant={isAdded ? 'ghost' : 'outline'}
               size="icon"
-              className={cn('h-8 w-8 shrink-0', isAdded && 'text-emerald-500 hover:text-emerald-500')}
-              disabled={isAdded}
+              className={cn(
+                'h-8 w-8 shrink-0',
+                isAdded && 'text-emerald-500 hover:text-emerald-500',
+                addDisabled && 'cursor-not-allowed opacity-50',
+              )}
+              disabled={isAdded || addDisabled}
               onClick={() => onAdd(track)}
-              aria-label={isAdded ? '已添加' : `添加 ${track.title} 到播放列表`}
+              aria-label={isAdded ? '已添加' : addDisabled ? addDisabledReason : `添加 ${track.title} 到播放列表`}
             >
               {isAdded ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{isAdded ? '已添加' : '添加到播放列表'}</TooltipContent>
+          <TooltipContent>{isAdded ? '已添加' : addDisabled ? addDisabledReason : '添加到播放列表'}</TooltipContent>
         </Tooltip>
 
-        {onInsertAfterCurrent && !isAdded && (
+        {onInsertAfterCurrent && !isAdded && !addDisabled && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

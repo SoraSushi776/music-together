@@ -45,6 +45,7 @@ export function QueueDrawer({
 }: QueueDrawerProps) {
   const queue = useRoomStore((s) => s.room?.queue ?? EMPTY_QUEUE)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
+  const currentUser = useRoomStore((s) => s.currentUser)
   const { socket } = useSocketContext()
   const isMobile = useIsMobile() // layout: Drawer direction, height
   const hasHover = useHasHover() // interaction: hover vs touch
@@ -61,6 +62,11 @@ export function QueueDrawer({
   const canVoteNow = canVote && !votingDisabledForMe
   const [confirmClear, setConfirmClear] = useState(false)
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 自己点选的歌曲可免投票直接移除（服务端 QUEUE_REMOVE 同样放行）
+  const isOwnTrack = useCallback(
+    (track: Track) => !!track.requestedBy && track.requestedBy === currentUser?.nickname,
+    [currentUser?.nickname],
+  )
   // Mobile: track which item has its action toolbar visible
   const [activeTrackId, setActiveTrackId] = useState<string | null>(null)
   // Desktop: after clicking an action, temporarily suppress the hover toolbar until the cursor leaves the item
@@ -134,7 +140,8 @@ export function QueueDrawer({
   }
 
   const handleRemoveTrack = (track: Track) => {
-    if (canRemove) {
+    // 特权角色可移除任意歌曲；普通成员可免投票移除自己点选的歌曲；其余走投票
+    if (canRemove || isOwnTrack(track)) {
       onRemoveFromQueue(track.id)
       toast.success(`已移除「${track.title}」`)
     } else if (canVoteNow) {
@@ -415,7 +422,7 @@ export function QueueDrawer({
                         </>
                       )}
 
-                      {(canRemove || canVoteNow) && (
+                      {(canRemove || canVoteNow || isOwnTrack(track)) && (
                         <Tooltip delayDuration={400}>
                           <TooltipTrigger asChild>
                             <Button
@@ -423,12 +430,16 @@ export function QueueDrawer({
                               size="icon"
                               className="h-6 w-6 min-h-9 min-w-9 sm:min-h-0 sm:min-w-0 text-destructive hover:text-destructive"
                               onClick={() => handleRemoveTrack(track)}
-                              aria-label={canRemove ? `移除 ${track.title}` : `投票移除 ${track.title}`}
+                              aria-label={
+                                canRemove || isOwnTrack(track) ? `移除 ${track.title}` : `投票移除 ${track.title}`
+                              }
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">{canRemove ? '移除' : '投票移除'}</TooltipContent>
+                          <TooltipContent side="bottom">
+                            {canRemove ? '移除' : isOwnTrack(track) ? '移除（我点的歌）' : '投票移除'}
+                          </TooltipContent>
                         </Tooltip>
                       )}
                     </div>

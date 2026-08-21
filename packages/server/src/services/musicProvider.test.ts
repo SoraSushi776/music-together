@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as tencentAuth from './tencentAuthService.js'
-import { deriveThumbnailCoverUrl, musicProvider, normalizeKugouTemplateCoverUrl, normalizeNeteaseCoverUrl } from './musicProvider.js'
+import {
+  buildTrackSourceUrl,
+  deriveThumbnailCoverUrl,
+  musicProvider,
+  normalizeKugouTemplateCoverUrl,
+  normalizeNeteaseCoverUrl,
+} from './musicProvider.js'
 
 const tencentSong = {
   id: 410316279,
@@ -48,6 +54,7 @@ describe('Tencent music search', () => {
       duration: 231,
       cover: 'https://y.gtimg.cn/music/photo_new/T002R800x800M000000MkMni19ClKG.jpg',
       thumbnailCover: 'https://y.gtimg.cn/music/photo_new/T002R120x120M000000MkMni19ClKG.jpg',
+      sourceUrl: 'https://y.qq.com/n/ryqq/songDetail/003VHaBb0wCHop',
       vip: true,
     })
   })
@@ -65,6 +72,26 @@ describe('Tencent music search', () => {
     vi.spyOn(tencentAuth, 'requestSignedApi').mockRejectedValue(new Error('upstream unavailable'))
 
     await expect(musicProvider.search('tencent', 'failure test fixture', 20, 1)).resolves.toEqual([])
+  })
+})
+
+describe('buildTrackSourceUrl — track page URL on its source platform', () => {
+  it('builds a NetEase song page from the numeric id', () => {
+    expect(buildTrackSourceUrl('netease', '25906124')).toBe('https://music.163.com/song?id=25906124')
+  })
+
+  it('builds a QQ Music song page from the song mid', () => {
+    expect(buildTrackSourceUrl('tencent', '003VHaBb0wCHop')).toBe('https://y.qq.com/n/ryqq/songDetail/003VHaBb0wCHop')
+  })
+
+  it('falls back to the Kugou search page with an encoded keyword (no stable hash deep link)', () => {
+    expect(buildTrackSourceUrl('kugou', 'abc123hash', '告白气球')).toBe(
+      'https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord=%E5%91%8A%E7%99%BD%E6%B0%94%E7%90%83',
+    )
+  })
+
+  it('returns undefined for Kugou without a keyword', () => {
+    expect(buildTrackSourceUrl('kugou', 'abc123hash')).toBeUndefined()
   })
 })
 

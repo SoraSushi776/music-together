@@ -6,11 +6,13 @@ import type { RoomData } from '../repositories/types.js'
 import {
   addBatchTracks,
   addTrack,
+  canRemoveTrackWithoutVote,
   getNextTrack,
   getPreviousTrack,
   getSuccessorAfterRemoval,
   insertAfterCurrent,
   interleaveByRequester,
+  removeTracksByRequester,
   reorderTracks,
   shuffleQueue,
 } from './queueService.js'
@@ -150,11 +152,70 @@ describe('queueService — per-listener song limit (maxSongsPerUser)', () => {
   })
 
   it('enforces the cap on insertAfterCurrent too', () => {
-    roomRepo.set('ROOM01', makeRoom([makeRequestedTrack('a1', 'A'), makeRequestedTrack('a2', 'A')], makeRequestedTrack('a1', 'A')))
+    const a1 = makeRequestedTrack('a1', 'A')
+    roomRepo.set(
+      'ROOM01',
+      makeRoom([a1, makeRequestedTrack('a2', 'A'), makeRequestedTrack('a3', 'A')], a1),
+    )
     roomRepo.get('ROOM01')!.maxSongsPerUser = 2
 
-    expect(insertAfterCurrent('ROOM01', makeRequestedTrack('a3', 'A'))).toBe('user-limit')
+    // a2/a3 are upcoming and already fill A's quota; the playing a1 does not count
+    expect(insertAfterCurrent('ROOM01', makeRequestedTrack('a4', 'A'))).toBe('user-limit')
     expect(insertAfterCurrent('ROOM01', makeRequestedTrack('b1', 'B'))).toBe('added')
+  })
+
+  it('played tracks and the current track do NOT occupy the per-listener quota', () => {
+    // Regression: with playlist semantics the queue keeps played tracks forever.
+    // A listener whose 5 songs all finished must be able to queue new songs
+    // again without deleting the old entries.
+    const played = Array.from({ length: 4 }, (_, i) => makeRequestedTrack(`p${i}`, 'A'))
+    const lastPlayed = makeRequestedTrack('p4', 'A')
+    roomRepo.set('ROOM01', makeRoom([...played, lastPlayed], lastPlayed))
+    roomRepo.get('ROOM01')!.maxSongsPerUser = 5
+
+    // All 5 of A's songs are played; nothing upcoming -> quota is free again
+    expect(addTrack('ROOM01', makeRequestedTrack('a-new', 'A'))).toBe('added')
+    expect(roomRepo.get('ROOM01')?.queue).toHaveLength(6)
+  })
+
+  it('counts only the upcoming slice when the current track is mid-queue', () => {
+    const played = [makeRequestedTrack('p0', 'A'), makeRequestedTrack('p1', 'A')]
+    const current = makeRequestedTrack('cur', 'A')
+    const upcoming = [makeRequestedTrack('u0', 'A')]
+    roomRepo.set('ROOM01', makeRoom([...played, current, ...upcoming], current))
+    roomRepo.get('ROOM01')!.maxSongsPerUser = 2
+
+    // Only u0 (upcoming) counts; p0/p1 (played) and cur (playing) don't
+    expect(addTrack('ROOM01', makeRequestedTrack('u1', 'A'))).toBe('added')
+    expect(addTrack('ROOM01', makeRequestedTrack('u2', 'A'))).toBe('user-limit')
+  })
+
+  it('uses a scheduled pendingPlayback track as the played/played-not boundary', () => {
+    const room = makeRoom(
+      [
+        makeRequestedTrack('p0', 'A'),
+        makeRequestedTrack('scheduled', 'A'),
+        makeRequestedTrack('u0', 'A'),
+      ],
+      makeRequestedTrack('p0', 'A'),
+    )
+    room.maxSongsPerUser = 2
+    const timer = setTimeout(() => {}, 60_000)
+    room.pendingPlayback = {
+      type: 'play',
+      track: room.queue[1],
+      playState: { isPlaying: true, currentTime: 0, serverTimestamp: Date.now(), revision: 1, serverTimeToExecute: Date.now() + 1000 },
+      timer,
+    }
+    roomRepo.set('ROOM01', room)
+
+    try {
+      // Boundary is the scheduled track: only u0 counts against A's quota
+      expect(addTrack('ROOM01', makeRequestedTrack('u1', 'A'))).toBe('added')
+      expect(addTrack('ROOM01', makeRequestedTrack('u2', 'A'))).toBe('user-limit')
+    } finally {
+      clearTimeout(timer)
+    }
   })
 
   it('caps a batch import at the remaining per-user quota', () => {
@@ -172,6 +233,111 @@ describe('queueService — per-listener song limit (maxSongsPerUser)', () => {
 
     const batch = Array.from({ length: 4 }, (_, i) => makeRequestedTrack(`b${i}`, 'A'))
     expect(addBatchTracks('ROOM01', batch)).toEqual({ added: 0, reason: 'user-limit' })
+  })
+})
+
+describe('queueService — canRemoveTrackWithoutVote (self-removal rule)', () => {
+  const own = makeRequestedTrack('own-1', '小明')
+  const others = makeRequestedTrack('other-1', '小红')
+  const anonymous = makeTrack('anon-1')
+  const room = { queue: [own, others, anonymous] }
+
+  it('lets a member remove their own requested track without a vote', () => {
+    expect(canRemoveTrackWithoutVote(room, { role: 'member', nickname: '小明' }, 'own-1')).toBe(true)
+  })
+
+  it('blocks a member from removing tracks requested by others', () => {
+    expect(canRemoveTrackWithoutVote(room, { role: 'member', nickname: '小明' }, 'other-1')).toBe(false)
+  })
+
+  it('blocks a member from removing tracks without a requester (e.g. imported)', () => {
+    expect(canRemoveTrackWithoutVote(room, { role: 'member', nickname: '小明' }, 'anon-1')).toBe(false)
+  })
+
+  it('blocks a member whose nickname no longer matches (renamed after queuing)', () => {
+    expect(canRemoveTrackWithoutVote(room, { role: 'member', nickname: '小明_new' }, 'own-1')).toBe(false)
+  })
+
+  it('blocks when the track does not exist in the queue', () => {
+    expect(canRemoveTrackWithoutVote(room, { role: 'member', nickname: '小明' }, 'missing')).toBe(false)
+  })
+
+  it('lets owner and admin remove any track', () => {
+    expect(canRemoveTrackWithoutVote(room, { role: 'owner', nickname: '房主' }, 'other-1')).toBe(true)
+    expect(canRemoveTrackWithoutVote(room, { role: 'admin', nickname: '管理员' }, 'anon-1')).toBe(true)
+  })
+})
+
+describe('queueService — removeTracksByRequester (auto-remove on leave)', () => {
+  it('removes only the requester’s upcoming tracks, keeping played/current/others’ tracks', () => {
+    const playedA = makeRequestedTrack('played-a', 'A')
+    const currentA = makeRequestedTrack('current-a', 'A')
+    const upcomingA1 = makeRequestedTrack('upcoming-a1', 'A')
+    const upcomingA2 = makeRequestedTrack('upcoming-a2', 'A')
+    const upcomingB = makeRequestedTrack('upcoming-b', 'B')
+    const anonymous = makeTrack('anon')
+    roomRepo.set(
+      'ROOM01',
+      makeRoom([playedA, currentA, upcomingA1, upcomingB, upcomingA2, anonymous], currentA),
+    )
+
+    const removed = removeTracksByRequester('ROOM01', 'A')
+
+    expect(removed.map((t) => t.id).sort()).toEqual(['upcoming-a1', 'upcoming-a2'])
+    expect(roomRepo.get('ROOM01')?.queue.map((t) => t.id)).toEqual([
+      'played-a',
+      'current-a',
+      'upcoming-b',
+      'anon',
+    ])
+  })
+
+  it('treats a scheduled pendingPlayback track as the played/unplayed boundary', () => {
+    const current = makeRequestedTrack('current', 'B')
+    const scheduled = makeRequestedTrack('scheduled', 'A')
+    const upcomingA = makeRequestedTrack('upcoming-a', 'A')
+    const room = makeRoom([current, scheduled, upcomingA], current)
+    const timer = setTimeout(() => {}, 60_000)
+    room.pendingPlayback = {
+      type: 'play',
+      track: scheduled,
+      playState: { isPlaying: true, currentTime: 0, serverTimestamp: Date.now(), revision: 1, serverTimeToExecute: Date.now() + 1000 },
+      timer,
+    }
+    roomRepo.set('ROOM01', room)
+
+    try {
+      // The already-scheduled track must survive; only upcoming-a is removed
+      const removed = removeTracksByRequester('ROOM01', 'A')
+      expect(removed.map((t) => t.id)).toEqual(['upcoming-a'])
+      expect(roomRepo.get('ROOM01')?.queue.map((t) => t.id)).toEqual(['current', 'scheduled'])
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+
+  it('removes everything for the requester when nothing is playing', () => {
+    const a1 = makeRequestedTrack('a1', 'A')
+    const b1 = makeRequestedTrack('b1', 'B')
+    roomRepo.set('ROOM01', makeRoom([a1, b1]))
+
+    const removed = removeTracksByRequester('ROOM01', 'A')
+    expect(removed.map((t) => t.id)).toEqual(['a1'])
+    expect(roomRepo.get('ROOM01')?.queue.map((t) => t.id)).toEqual(['b1'])
+  })
+
+  it('returns an empty list when nothing matches (no-op, no queue mutation)', () => {
+    const b1 = makeRequestedTrack('b1', 'B')
+    const anon = makeTrack('anon')
+    roomRepo.set('ROOM01', makeRoom([b1, anon]))
+
+    expect(removeTracksByRequester('ROOM01', 'A')).toEqual([])
+    expect(removeTracksByRequester('ROOM01', undefined)).toEqual([])
+    expect(roomRepo.get('ROOM01')?.queue.map((t) => t.id)).toEqual(['b1', 'anon'])
+  })
+
+  it('returns an empty list for a missing room', () => {
+    expect(removeTracksByRequester('NOPE', 'A')).toEqual([])
   })
 })
 

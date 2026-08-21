@@ -13,6 +13,7 @@ import { cleanupSocketRateLimit } from '../middleware/socketRateLimiter.js'
 import { roomRepo } from '../repositories/roomRepository.js'
 import * as chatService from '../services/chatService.js'
 import * as playerService from '../services/playerService.js'
+import * as queueService from '../services/queueService.js'
 import { issueRejoinTicket, revokeRejoinTickets } from '../services/rejoinTicketService.js'
 import * as roomService from '../services/roomService.js'
 import * as voteService from '../services/voteService.js'
@@ -317,9 +318,25 @@ function handleLeave(io: TypedServer, socket: TypedSocket, reason?: string, revo
 
   io.to(roomId).emit(EVENTS.ROOM_USER_LEFT, user)
 
+  // Auto-remove the departing listener's upcoming songs from the queue.
+  // Only applies while others are still in the room (an emptied room enters
+  // the deletion grace period, and a solo listener refreshing the page should
+  // not lose their own queue). Played/current/scheduled tracks are kept.
+  let removedTrackCount = 0
+  if (room && room.users.length > 0) {
+    removedTrackCount = queueService.removeTracksByRequester(roomId, user.nickname).length
+    if (removedTrackCount > 0) {
+      io.to(roomId).emit(EVENTS.QUEUE_UPDATED, { queue: room.queue })
+    }
+  }
+
   // System message for user left (server-authoritative)
   if (room && room.users.length > 0) {
-    const leaveMsg = chatService.createSystemMessage(roomId, `${user.nickname} 离开了房间`)
+    const leaveText =
+      removedTrackCount > 0
+        ? `${user.nickname} 离开了房间，其点播的 ${removedTrackCount} 首歌曲已从队列移除`
+        : `${user.nickname} 离开了房间`
+    const leaveMsg = chatService.createSystemMessage(roomId, leaveText)
     io.to(roomId).emit(EVENTS.CHAT_MESSAGE, leaveMsg)
   }
 

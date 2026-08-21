@@ -2,6 +2,7 @@ import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAuth } from '@/hooks/useAuth'
 import { usePlaylist } from '@/hooks/usePlaylist'
+import { useAppAbility } from '@/providers/AbilityProvider'
 import { PLATFORM_SHORT_LABELS, PLATFORM_COLORS, getPlatformStatus, getMyPlatformStatus } from '@/lib/platform'
 import { storage } from '@/lib/storage'
 import type { MusicSource, Playlist } from '@music-together/shared'
@@ -17,6 +18,8 @@ type ViewState = { type: 'list' } | { type: 'detail'; playlist: Playlist; source
 export function PlatformHub() {
   const auth = useAuth()
   const playlist = usePlaylist()
+  // Insert-after-current (置顶) is restricted to privileged roles (owner/admin)
+  const canInsertAfterCurrent = useAppAbility().can('reorder', 'Queue')
 
   const [activePlatform, setActivePlatform] = useState<MusicSource>('netease')
   const [qrDialogOpen, setQrDialogOpen] = useState(false)
@@ -82,7 +85,7 @@ export function PlatformHub() {
             total={playlist.playlistTotal}
             onBack={handleBack}
             onAddTrack={playlist.addTrackToQueue}
-            onInsertAfterCurrent={playlist.insertTrackAfterCurrent}
+            onInsertAfterCurrent={canInsertAfterCurrent ? playlist.insertTrackAfterCurrent : undefined}
             onAddAll={playlist.addBatchToQueue}
             onLoadMore={playlist.loadMoreTracks}
           />
