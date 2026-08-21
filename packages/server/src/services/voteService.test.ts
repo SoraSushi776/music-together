@@ -1,4 +1,4 @@
-import type { User } from '@music-together/shared'
+import type { RoomData, User, UserRole } from '@music-together/shared'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   cancelVote,
@@ -6,6 +6,7 @@ import {
   claimVote,
   createVote,
   getActiveVote,
+  getVoteBlockReason,
   reconcileVote,
 } from './voteService.js'
 
@@ -112,5 +113,25 @@ describe('voteService', () => {
     const newVote = createVote('ROOM01', 'host', initiator, 'pause', 3)!
     cancelVote('ROOM01', oldVote.id)
     expect(getActiveVote('ROOM01')?.id).toBe(newVote.id)
+  })
+})
+
+describe('getVoteBlockReason', () => {
+  const makeRoom = (disableVoting: boolean) => ({ disableVoting }) as unknown as RoomData
+
+  it('blocks a member when voting is disabled', () => {
+    expect(getVoteBlockReason(makeRoom(true), 'member' as UserRole)).toMatchObject({
+      code: 'VOTING_DISABLED',
+      message: expect.any(String),
+    })
+  })
+
+  it('allows a member when voting is enabled', () => {
+    expect(getVoteBlockReason(makeRoom(false), 'member' as UserRole)).toBeNull()
+  })
+
+  it('never blocks owner or admin (they act directly, not via votes)', () => {
+    expect(getVoteBlockReason(makeRoom(true), 'owner' as UserRole)).toBeNull()
+    expect(getVoteBlockReason(makeRoom(true), 'admin' as UserRole)).toBeNull()
   })
 })

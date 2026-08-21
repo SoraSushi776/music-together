@@ -28,6 +28,10 @@ export interface RoomData {
     timer: ReturnType<typeof setTimeout>
   } | null
   playMode: PlayMode
+  /** 房主/管理员开启后，普通成员无法发起任何投票（下一首、切换循环等） */
+  disableVoting: boolean
+  /** 单个听众最多点选歌曲数（0 = 不限制，上不封顶） */
+  maxSongsPerUser: number
 }
 
 export interface SocketMapping {

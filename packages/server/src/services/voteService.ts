@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid'
-import type { VoteAction, VoteState, User } from '@music-together/shared'
-import { TIMING } from '@music-together/shared'
+import type { VoteAction, VoteState, User, UserRole } from '@music-together/shared'
+import { ERROR_CODE, TIMING } from '@music-together/shared'
+import type { RoomData } from '../repositories/types.js'
 import { logger } from '../utils/logger.js'
 
 interface Vote {
@@ -27,6 +28,29 @@ export interface VoteDecision {
 
 /** Active vote per room (at most one at a time) */
 const activeVotes = new Map<string, Vote>()
+
+/** Block reason returned when a user is not allowed to start a vote. */
+export interface VoteBlockReason {
+  code: string
+  message: string
+}
+
+/**
+ * Decide whether the given user may start a new vote in the room.
+ *
+ * Only non-privileged members initiate votes — owner/admin take direct action
+ * and never reach the vote path, so they are unaffected by `disableVoting`.
+ * When the room has voting disabled, ordinary members are blocked.
+ */
+export function getVoteBlockReason(room: RoomData, userRole: UserRole): VoteBlockReason | null {
+  if (room.disableVoting && userRole === 'member') {
+    return {
+      code: ERROR_CODE.VOTING_DISABLED,
+      message: '房主已禁用投票，你暂时无法发起投票',
+    }
+  }
+  return null
+}
 
 /**
  * Create a new vote. Returns null if a vote is already in progress.

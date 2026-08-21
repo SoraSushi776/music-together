@@ -46,6 +46,14 @@ export function registerVoteController(io: TypedServer, socket: TypedSocket) {
         return
       }
 
+      // 房主/管理员开启“禁用投票”后，普通成员无法发起任何投票（下一首、切换循环等）。
+      // 特权用户已在上面的直接执行分支放行，不会走到这里。
+      const voteBlock = voteService.getVoteBlockReason(ctx.room, ctx.user.role)
+      if (voteBlock) {
+        ctx.socket.emit(EVENTS.ROOM_ERROR, voteBlock)
+        return
+      }
+
       // Check if user can vote
       if (!ability.can('vote', 'Player')) {
         ctx.socket.emit(EVENTS.ROOM_ERROR, { code: ERROR_CODE.NO_PERMISSION, message: '你没有投票权限' })

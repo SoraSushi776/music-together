@@ -54,6 +54,11 @@ export function QueueDrawer({
   const canReorder = ability.can('reorder', 'Queue')
   const canPlay = ability.can('play', 'Player')
   const canVote = ability.can('vote', 'Player')
+  // 房主/管理员拥有直接控制权，不会走投票逻辑；普通成员在房间禁用投票时无法投票。
+  const disableVoting = useRoomStore((s) => s.room?.disableVoting ?? false)
+  const isPrivileged = ability.can('next', 'Player')
+  const votingDisabledForMe = disableVoting && !isPrivileged
+  const canVoteNow = canVote && !votingDisabledForMe
   const [confirmClear, setConfirmClear] = useState(false)
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Mobile: track which item has its action toolbar visible
@@ -119,10 +124,10 @@ export function QueueDrawer({
   const handlePlayTrack = (track: Track) => {
     if (canPlay) {
       socket.emit(EVENTS.PLAYER_PLAY, { track })
-    } else if (canVote) {
+    } else if (canVoteNow) {
       socket.emit(EVENTS.VOTE_START, {
         action: 'play-track' as const,
-        payload: { trackId: track.id, trackTitle: track.title },
+        payload: { trackId: track.id, trackTitle: track.title, cover: track.cover, thumbnailCover: track.thumbnailCover },
       })
       toast.info(`已发起投票：播放「${track.title}」`)
     }
@@ -132,10 +137,10 @@ export function QueueDrawer({
     if (canRemove) {
       onRemoveFromQueue(track.id)
       toast.success(`已移除「${track.title}」`)
-    } else if (canVote) {
+    } else if (canVoteNow) {
       socket.emit(EVENTS.VOTE_START, {
         action: 'remove-track' as const,
-        payload: { trackId: track.id, trackTitle: track.title },
+        payload: { trackId: track.id, trackTitle: track.title, cover: track.cover, thumbnailCover: track.thumbnailCover },
       })
       toast.info(`已发起投票：移除「${track.title}」`)
     }
@@ -342,7 +347,7 @@ export function QueueDrawer({
                       onClick={(e) => e.stopPropagation()}
                     >
                       {/* Play button — hidden for currently playing track */}
-                      {currentTrack?.id !== track.id && (canPlay || canVote) && (
+                      {currentTrack?.id !== track.id && (canPlay || canVoteNow) && (
                         <Tooltip delayDuration={400}>
                           <TooltipTrigger asChild>
                             <Button
@@ -410,7 +415,7 @@ export function QueueDrawer({
                         </>
                       )}
 
-                      {(canRemove || canVote) && (
+                      {(canRemove || canVoteNow) && (
                         <Tooltip delayDuration={400}>
                           <TooltipTrigger asChild>
                             <Button

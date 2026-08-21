@@ -14,7 +14,19 @@ import { checkSocketRateLimit } from '../middleware/socketRateLimiter.js'
 import * as chatService from '../services/chatService.js'
 import * as playerService from '../services/playerService.js'
 import * as queueService from '../services/queueService.js'
+import type { AddResult } from '../services/queueService.js'
 import { logger } from '../utils/logger.js'
+
+const QUEUE_FULL_ERROR = { code: ERROR_CODE.QUEUE_FULL, message: '播放队列已满' }
+const USER_QUEUE_LIMIT_ERROR = {
+  code: ERROR_CODE.USER_QUEUE_LIMIT,
+  message: '你已点选过多歌曲，请等待播放后再点歌',
+}
+
+/** Map a failed single-track add outcome to the appropriate client-facing error. */
+function mapQueueAddError(result: Exclude<AddResult, 'added'>): { code: string; message: string } {
+  return result === 'user-limit' ? USER_QUEUE_LIMIT_ERROR : QUEUE_FULL_ERROR
+}
 
 export function registerQueueController(io: TypedServer, socket: TypedSocket) {
   const withPermission = createWithPermission(io)
@@ -30,9 +42,9 @@ export function registerQueueController(io: TypedServer, socket: TypedSocket) {
       }
       const track: Track = { ...parsed.data.track, requestedBy: ctx.user.nickname }
 
-      const added = queueService.addTrack(ctx.roomId, track)
-      if (!added) {
-        socket.emit(EVENTS.ROOM_ERROR, { code: ERROR_CODE.QUEUE_FULL, message: '播放队列已满' })
+      const result = queueService.addTrack(ctx.roomId, track)
+      if (result !== 'added') {
+        socket.emit(EVENTS.ROOM_ERROR, mapQueueAddError(result))
         return
       }
       io.to(ctx.roomId).emit(EVENTS.QUEUE_UPDATED, { queue: ctx.room.queue })
@@ -62,9 +74,9 @@ export function registerQueueController(io: TypedServer, socket: TypedSocket) {
       }
       const track: Track = { ...parsed.data.track, requestedBy: ctx.user.nickname }
 
-      const added = queueService.insertAfterCurrent(ctx.roomId, track)
-      if (!added) {
-        socket.emit(EVENTS.ROOM_ERROR, { code: ERROR_CODE.QUEUE_FULL, message: '播放队列已满' })
+      const result = queueService.insertAfterCurrent(ctx.roomId, track)
+      if (result !== 'added') {
+        socket.emit(EVENTS.ROOM_ERROR, mapQueueAddError(result))
         return
       }
       io.to(ctx.roomId).emit(EVENTS.QUEUE_UPDATED, { queue: ctx.room.queue })
@@ -92,9 +104,9 @@ export function registerQueueController(io: TypedServer, socket: TypedSocket) {
       const { tracks: rawTracks, playlistName } = parsed.data
       const tracks: Track[] = rawTracks.map((t) => ({ ...t, requestedBy: ctx.user.nickname }))
 
-      const addedCount = queueService.addBatchTracks(ctx.roomId, tracks)
+      const { added: addedCount, reason } = queueService.addBatchTracks(ctx.roomId, tracks)
       if (addedCount === 0) {
-        socket.emit(EVENTS.ROOM_ERROR, { code: ERROR_CODE.QUEUE_FULL, message: '播放队列已满' })
+        socket.emit(EVENTS.ROOM_ERROR, reason === 'user-limit' ? USER_QUEUE_LIMIT_ERROR : QUEUE_FULL_ERROR)
         return
       }
       io.to(ctx.roomId).emit(EVENTS.QUEUE_UPDATED, { queue: ctx.room.queue })

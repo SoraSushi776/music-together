@@ -80,6 +80,12 @@ export function NowPlaying({ compact = false, onCoverClick }: NowPlayingProps) {
           >
             <MarqueeText>{currentTrack ? currentTrack.artist.join(' / ') : '...'}</MarqueeText>
           </motion.div>
+          {currentTrack?.requestedBy && (
+            <div className="flex items-center gap-1 truncate text-[11px] text-white/30">
+              <span className="shrink-0">点歌人</span>
+              <span className="truncate">{currentTrack.requestedBy}</span>
+            </div>
+          )}
         </motion.div>
       </div>
     )

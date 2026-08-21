@@ -30,6 +30,8 @@ function makeRoom(): RoomData {
     currentTrack,
     playState: { isPlaying: false, currentTime: 0, serverTimestamp: 0, revision: 0 },
     playMode: 'loop-all',
+    disableVoting: false,
+    maxSongsPerUser: 0,
   }
 }
 

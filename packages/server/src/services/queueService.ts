@@ -2,43 +2,87 @@ import type { PlayMode, Track } from '@music-together/shared'
 import { LIMITS } from '@music-together/shared'
 import { roomRepo } from '../repositories/roomRepository.js'
 
-export function addTrack(roomId: string, track: Track): boolean {
+/** Result of a single-track queue add attempt. */
+export type AddResult = 'added' | 'queue-full' | 'user-limit'
+
+/**
+ * How many tracks in the queue were requested by `requester`.
+ * `requestedBy` is the nickName injected by the server when a user adds a song,
+ * which is the same key used by `interleaveByRequester` for fairness ordering.
+ */
+function countTracksByRequester(room: { queue: Track[] }, requester: string | undefined): number {
+  if (!requester) return 0
+  return room.queue.filter((t) => t.requestedBy === requester).length
+}
+
+/**
+ * Whether adding one more track for `requester` would exceed the room's
+ * per-listener quota. Returns the concrete failure reason, or null if allowed.
+ */
+function checkAddQuota(
+  room: { queue: Track[]; maxSongsPerUser: number },
+  requester: string | undefined,
+): Exclude<AddResult, 'added'> | null {
+  if (room.queue.length >= LIMITS.QUEUE_MAX_SIZE) return 'queue-full'
+  if (room.maxSongsPerUser > 0) {
+    const existing = countTracksByRequester(room, requester)
+    if (existing >= room.maxSongsPerUser) return 'user-limit'
+  }
+  return null
+}
+
+export function addTrack(roomId: string, track: Track): AddResult {
   const room = roomRepo.get(roomId)
-  if (!room) return false
-  if (room.queue.length >= LIMITS.QUEUE_MAX_SIZE) return false
+  if (!room) return 'queue-full'
+  const blocked = checkAddQuota(room, track.requestedBy)
+  if (blocked) return blocked
   room.queue.push(track)
-  return true
+  return 'added'
 }
 
 /**
  * Add multiple tracks at once (from playlist import).
- * Respects QUEUE_MAX_SIZE — adds as many as fit.
- * @returns Number of tracks actually added.
+ * Respects both QUEUE_MAX_SIZE and the per-listener quota — adds as many as fit.
+ * @returns Number of tracks actually added and the reason addition stopped (if any).
  */
-export function addBatchTracks(roomId: string, tracks: Track[]): number {
+export function addBatchTracks(
+  roomId: string,
+  tracks: Track[],
+): { added: number; reason?: 'queue-full' | 'user-limit' } {
   const room = roomRepo.get(roomId)
-  if (!room) return 0
+  if (!room) return { added: 0 }
   const available = LIMITS.QUEUE_MAX_SIZE - room.queue.length
-  if (available <= 0) return 0
-  const toAdd = tracks.slice(0, available)
+  if (available <= 0) return { added: 0, reason: 'queue-full' }
+
+  let quota = available
+  if (room.maxSongsPerUser > 0) {
+    const requester = tracks[0]?.requestedBy
+    const existing = countTracksByRequester(room, requester)
+    const remaining = Math.max(0, room.maxSongsPerUser - existing)
+    quota = Math.min(available, remaining)
+  }
+  if (quota <= 0) return { added: 0, reason: 'user-limit' }
+
+  const toAdd = tracks.slice(0, quota)
   room.queue.push(...toAdd)
-  return toAdd.length
+  return { added: toAdd.length }
 }
 
 /**
  * Insert a new track right after the current playing track.
  * If current track is missing from the queue (edge race), insert to the front.
  */
-export function insertAfterCurrent(roomId: string, track: Track): boolean {
+export function insertAfterCurrent(roomId: string, track: Track): AddResult {
   const room = roomRepo.get(roomId)
-  if (!room) return false
-  if (room.queue.length >= LIMITS.QUEUE_MAX_SIZE) return false
+  if (!room) return 'queue-full'
+  const blocked = checkAddQuota(room, track.requestedBy)
+  if (blocked) return blocked
 
   const currentId = room.currentTrack?.id
   const currentIndex = currentId ? room.queue.findIndex((t) => t.id === currentId) : -1
   const insertIndex = currentIndex >= 0 ? currentIndex + 1 : 0
   room.queue.splice(insertIndex, 0, track)
-  return true
+  return 'added'
 }
 
 export function removeTrack(roomId: string, trackId: string): void {

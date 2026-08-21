@@ -10,12 +10,15 @@ export const ERROR_CODE = {
   NOT_OWNER: 'NOT_OWNER',
   NO_PERMISSION: 'NO_PERMISSION',
   SET_ROLE_FAILED: 'SET_ROLE_FAILED',
+  VOTING_DISABLED: 'VOTING_DISABLED',
   QUEUE_FULL: 'QUEUE_FULL',
   STREAM_FAILED: 'STREAM_FAILED',
   RATE_LIMITED: 'RATE_LIMITED',
   NO_VOTE_NEEDED: 'NO_VOTE_NEEDED',
   VOTE_IN_PROGRESS: 'VOTE_IN_PROGRESS',
   ALREADY_VOTED: 'ALREADY_VOTED',
+  /** 单个听众点选歌曲数已达房间上限 */
+  USER_QUEUE_LIMIT: 'USER_QUEUE_LIMIT',
 } as const
 
 export type ErrorCode = (typeof ERROR_CODE)[keyof typeof ERROR_CODE]
@@ -85,6 +88,10 @@ export interface RoomState {
   /** Present when playState describes a future pending playback action. */
   serverTimeToExecute?: number
   playMode: PlayMode
+  /** 房主已开启"禁用投票"后，普通成员无法发起投票（下一首、切换循环等） */
+  disableVoting: boolean
+  /** 单个听众最多点选歌曲数（0 = 不限制，上不封顶） */
+  maxSongsPerUser: number
 }
 
 export interface PlayState {

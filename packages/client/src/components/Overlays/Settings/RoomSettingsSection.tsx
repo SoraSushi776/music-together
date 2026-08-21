@@ -27,7 +27,13 @@ function getQualityLabel(quality: AudioQuality): string {
 }
 
 interface RoomSettingsSectionProps {
-  onUpdateSettings: (settings: { name?: string; password?: string | null; audioQuality?: AudioQuality }) => void
+  onUpdateSettings: (settings: {
+    name?: string
+    password?: string | null
+    audioQuality?: AudioQuality
+    disableVoting?: boolean
+    maxSongsPerUser?: number
+  }) => void
 }
 
 export function RoomSettingsSection({ onUpdateSettings }: RoomSettingsSectionProps) {
@@ -45,6 +51,8 @@ export function RoomSettingsSection({ onUpdateSettings }: RoomSettingsSectionPro
   }, [syncDrift])
   const [passwordInput, setPasswordInput] = useState('')
   const [passwordEnabled, setPasswordEnabled] = useState(room?.hasPassword ?? false)
+  const [disableVoting, setDisableVoting] = useState(room?.disableVoting ?? false)
+  const [maxSongsInput, setMaxSongsInput] = useState(String(room?.maxSongsPerUser ?? 0))
 
   // 昵称编辑
   const [nickname, setNickname] = useState(storage.getNickname())
@@ -65,6 +73,14 @@ export function RoomSettingsSection({ onUpdateSettings }: RoomSettingsSectionPro
     setPasswordInput('')
   }, [room?.hasPassword])
 
+  useEffect(() => {
+    setDisableVoting(room?.disableVoting ?? false)
+  }, [room?.disableVoting])
+
+  useEffect(() => {
+    setMaxSongsInput(String(room?.maxSongsPerUser ?? 0))
+  }, [room?.maxSongsPerUser])
+
   const copyRoomLink = () => {
     const url = `${window.location.origin}/room/${room?.id}`
     navigator.clipboard.writeText(url)
@@ -80,6 +96,21 @@ export function RoomSettingsSection({ onUpdateSettings }: RoomSettingsSectionPro
     } else {
       setPasswordEnabled(true)
     }
+  }
+
+  const handleToggleDisableVoting = (checked: boolean) => {
+    setDisableVoting(checked)
+    onUpdateSettings({ disableVoting: checked })
+    toast.success(checked ? '已禁用投票，普通成员无法发起投票' : '已恢复投票')
+  }
+
+  const handleSetMaxSongsPerUser = (raw: string) => {
+    // 空输入视为不限制（0）
+    const parsed = Number.parseInt(raw, 10)
+    const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
+    setMaxSongsInput(String(value))
+    onUpdateSettings({ maxSongsPerUser: value })
+    toast.success(value > 0 ? `单个听众最多点选 ${value} 首` : '已取消单曲上限（不限制）')
   }
 
   const handleSetPassword = () => {
@@ -244,6 +275,54 @@ export function RoomSettingsSection({ onUpdateSettings }: RoomSettingsSectionPro
           ) : (
             <Badge variant="outline" className="gap-1">
               <LockOpen className="h-3 w-3" /> 无密码
+            </Badge>
+          )}
+        </SettingRow>
+
+        <SettingRow
+          label="禁用投票"
+          description={
+            isOwner
+              ? '开启后，普通成员无法发起投票（下一首、切换循环等）'
+              : '房主开启后，你将无法发起投票'
+          }
+        >
+          {isOwner ? (
+            <Switch checked={disableVoting} onCheckedChange={handleToggleDisableVoting} />
+          ) : (
+            <Badge variant={room?.disableVoting ? 'destructive' : 'outline'} className="gap-1">
+              {room?.disableVoting ? '投票已禁用' : '投票开启中'}
+            </Badge>
+          )}
+        </SettingRow>
+
+        <SettingRow
+          label="单个听众最多点选歌曲数"
+          description={
+            isOwner
+              ? '限制单个人在队列中同时占用的歌曲数量，防止一人点一堆歌听不完（0 = 不限制，上不封顶）'
+              : '房主已限制单个人最多点选的歌曲数量'
+          }
+        >
+          {isOwner ? (
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                value={maxSongsInput}
+                onChange={(e) => setMaxSongsInput(e.target.value)}
+                onBlur={(e) => handleSetMaxSongsPerUser(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSetMaxSongsPerUser(maxSongsInput)}
+                className="h-8 w-24 text-sm"
+                placeholder="0"
+                aria-label="单个听众最多点选歌曲数"
+              />
+              <span className="text-xs text-muted-foreground">0 = 不限制</span>
+            </div>
+          ) : (
+            <Badge variant="outline" className="gap-1">
+              {room?.maxSongsPerUser && room.maxSongsPerUser > 0 ? `每人最多 ${room.maxSongsPerUser} 首` : '不限制'}
             </Badge>
           )}
         </SettingRow>

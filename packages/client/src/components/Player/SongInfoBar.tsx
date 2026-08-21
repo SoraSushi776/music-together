@@ -114,6 +114,12 @@ export const SongInfoBar = memo(function SongInfoBar({ onOpenChat, chatUnreadCou
           >
             <MarqueeText>{currentTrack ? currentTrack.artist.join(' / ') : '点击搜索添加歌曲到队列'}</MarqueeText>
           </motion.div>
+          {currentTrack?.requestedBy && (
+            <div className="flex items-center gap-1 truncate pt-0.5 text-[11px] text-white/30">
+              <span className="shrink-0">点歌人</span>
+              <span className="truncate">{currentTrack.requestedBy}</span>
+            </div>
+          )}
         </motion.div>
 
         {/* Right-bottom: volume + chat buttons (always visible, aligned to bottom) */}

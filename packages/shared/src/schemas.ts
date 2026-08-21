@@ -24,6 +24,10 @@ export const roomSettingsSchema = z.object({
   name: z.string().min(1).max(LIMITS.ROOM_NAME_MAX_LENGTH).optional(),
   password: z.string().max(LIMITS.ROOM_PASSWORD_MAX_LENGTH).nullable().optional(),
   audioQuality: audioQualitySchema.optional(),
+  /** 房主/管理员开启后，普通成员无法发起任何投票（下一首、切换循环等） */
+  disableVoting: z.boolean().optional(),
+  /** 单个听众最多点选歌曲数（0 = 不限制，上不封顶） */
+  maxSongsPerUser: z.number().int().nonnegative().optional(),
 })
 
 export const setRoleSchema = z.object({
@@ -161,8 +165,24 @@ const voteWithoutPayloadSchema = z.object({
 export const voteStartSchema = z.discriminatedUnion('action', [
   voteWithoutPayloadSchema,
   z.object({ action: z.literal('set-mode'), payload: playerSetModeSchema }),
-  z.object({ action: z.literal('play-track'), payload: z.object({ trackId: z.string().min(1).max(200) }) }),
-  z.object({ action: z.literal('remove-track'), payload: z.object({ trackId: z.string().min(1).max(200) }) }),
+  z.object({
+    action: z.literal('play-track'),
+    payload: z.object({
+      trackId: z.string().min(1).max(200),
+      trackTitle: z.string().min(1).max(500),
+      cover: z.string().max(2000).optional(),
+      thumbnailCover: z.string().max(2000).optional(),
+    }),
+  }),
+  z.object({
+    action: z.literal('remove-track'),
+    payload: z.object({
+      trackId: z.string().min(1).max(200),
+      trackTitle: z.string().min(1).max(500),
+      cover: z.string().max(2000).optional(),
+      thumbnailCover: z.string().max(2000).optional(),
+    }),
+  }),
 ])
 
 export const voteCastSchema = z.object({

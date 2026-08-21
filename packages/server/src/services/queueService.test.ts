@@ -5,6 +5,7 @@ import { roomRepo } from '../repositories/roomRepository.js'
 import type { RoomData } from '../repositories/types.js'
 import {
   addBatchTracks,
+  addTrack,
   getNextTrack,
   getPreviousTrack,
   getSuccessorAfterRemoval,
@@ -48,6 +49,8 @@ function makeRoom(queue: Track[], currentTrack: Track | null = null): RoomData {
     currentTrack,
     playState: { isPlaying: false, currentTime: 0, serverTimestamp: Date.now(), revision: 0 },
     playMode: 'sequential',
+    disableVoting: false,
+    maxSongsPerUser: 0,
   }
 }
 
@@ -63,7 +66,7 @@ describe('queueService', () => {
     const inserted = makeTrack('inserted')
     roomRepo.set('ROOM01', makeRoom([a, b], a))
 
-    expect(insertAfterCurrent('ROOM01', inserted)).toBe(true)
+    expect(insertAfterCurrent('ROOM01', inserted)).toBe('added')
     expect(roomRepo.get('ROOM01')?.queue.map((track) => track.id)).toEqual(['a', 'inserted', 'b'])
   })
 
@@ -82,7 +85,7 @@ describe('queueService', () => {
     const existing = Array.from({ length: LIMITS.QUEUE_MAX_SIZE - 1 }, (_, i) => makeTrack(`existing-${i}`))
     roomRepo.set('ROOM01', makeRoom(existing))
 
-    expect(addBatchTracks('ROOM01', [makeTrack('new-1'), makeTrack('new-2')])).toBe(1)
+    expect(addBatchTracks('ROOM01', [makeTrack('new-1'), makeTrack('new-2')])).toEqual({ added: 1 })
     expect(roomRepo.get('ROOM01')?.queue).toHaveLength(LIMITS.QUEUE_MAX_SIZE)
   })
 
@@ -120,6 +123,55 @@ describe('queueService', () => {
     expect(getPreviousTrack('ROOM01')).toBeNull()
     room.playMode = 'loop-all'
     expect(getPreviousTrack('ROOM01')?.id).toBe('b')
+  })
+})
+
+describe('queueService — per-listener song limit (maxSongsPerUser)', () => {
+  it('allows unlimited songs when limit is 0 (default)', () => {
+    roomRepo.set('ROOM01', makeRoom([]))
+    const tracks = Array.from({ length: 5 }, (_, i) => makeRequestedTrack(`a${i}`, 'A'))
+    for (const t of tracks) {
+      expect(addTrack('ROOM01', t)).toBe('added')
+    }
+    expect(roomRepo.get('ROOM01')?.queue).toHaveLength(5)
+  })
+
+  it('blocks a single listener once they reach the per-user cap', () => {
+    roomRepo.set('ROOM01', makeRoom([makeRequestedTrack('a1', 'A'), makeRequestedTrack('a2', 'A')]))
+    roomRepo.get('ROOM01')!.maxSongsPerUser = 2
+
+    // 3rd song by the same listener is rejected
+    expect(addTrack('ROOM01', makeRequestedTrack('a3', 'A'))).toBe('user-limit')
+    expect(roomRepo.get('ROOM01')?.queue).toHaveLength(2)
+
+    // but a different listener is still allowed
+    expect(addTrack('ROOM01', makeRequestedTrack('b1', 'B'))).toBe('added')
+    expect(roomRepo.get('ROOM01')?.queue).toHaveLength(3)
+  })
+
+  it('enforces the cap on insertAfterCurrent too', () => {
+    roomRepo.set('ROOM01', makeRoom([makeRequestedTrack('a1', 'A'), makeRequestedTrack('a2', 'A')], makeRequestedTrack('a1', 'A')))
+    roomRepo.get('ROOM01')!.maxSongsPerUser = 2
+
+    expect(insertAfterCurrent('ROOM01', makeRequestedTrack('a3', 'A'))).toBe('user-limit')
+    expect(insertAfterCurrent('ROOM01', makeRequestedTrack('b1', 'B'))).toBe('added')
+  })
+
+  it('caps a batch import at the remaining per-user quota', () => {
+    roomRepo.set('ROOM01', makeRoom([makeRequestedTrack('a0', 'A')]))
+    roomRepo.get('ROOM01')!.maxSongsPerUser = 3
+
+    const batch = Array.from({ length: 5 }, (_, i) => makeRequestedTrack(`a${i + 1}`, 'A'))
+    expect(addBatchTracks('ROOM01', batch)).toEqual({ added: 2 })
+    expect(roomRepo.get('ROOM01')?.queue.filter((t) => t.requestedBy === 'A')).toHaveLength(3)
+  })
+
+  it('returns user-limit when the per-user cap is already exhausted even if the queue has room', () => {
+    roomRepo.set('ROOM01', makeRoom(Array.from({ length: 3 }, (_, i) => makeRequestedTrack(`a${i}`, 'A'))))
+    roomRepo.get('ROOM01')!.maxSongsPerUser = 3
+
+    const batch = Array.from({ length: 4 }, (_, i) => makeRequestedTrack(`b${i}`, 'A'))
+    expect(addBatchTracks('ROOM01', batch)).toEqual({ added: 0, reason: 'user-limit' })
   })
 })
 

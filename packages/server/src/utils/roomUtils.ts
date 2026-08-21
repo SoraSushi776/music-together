@@ -24,6 +24,8 @@ export function toPublicRoomState(data: RoomData): RoomState {
       : data.playState,
     serverTimeToExecute: data.pendingPlayback?.playState.serverTimeToExecute,
     playMode: data.playMode,
+    disableVoting: data.disableVoting,
+    maxSongsPerUser: data.maxSongsPerUser,
   }
 }
 

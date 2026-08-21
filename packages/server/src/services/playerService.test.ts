@@ -47,6 +47,8 @@ function room(): RoomData {
     playState: { isPlaying: true, currentTime: 10, serverTimestamp: Date.now(), revision: 0 },
     pendingPlayback: null,
     playMode: 'loop-all',
+    disableVoting: false,
+    maxSongsPerUser: 0,
   }
 }
 

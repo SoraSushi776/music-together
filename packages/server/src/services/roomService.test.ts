@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { roomRepo } from '../repositories/roomRepository.js'
-import { createRoom, joinRoom, leaveRoom, setUserRole, validateJoinRequest } from './roomService.js'
+import {
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  setUserRole,
+  updateSettings,
+  validateJoinRequest,
+  toPublicRoomState,
+  toPublicRoomStateForOwner,
+} from './roomService.js'
 
 const ROOM_ID = 'ROOM01'
 
@@ -184,5 +193,62 @@ describe('roomService role and host reconciliation', () => {
     expect(room.hostId).toBe('admin')
     expect(room.playState.revision).toBe(5)
     expect(room.playState.currentTime).toBeCloseTo(32, 1)
+  })
+})
+
+describe('roomService settings — disableVoting', () => {
+  it('defaults new rooms to voting enabled', () => {
+    const room = createTestRoom()
+    expect(room.disableVoting).toBe(false)
+  })
+
+  it('updates the disableVoting flag without touching other fields', () => {
+    const room = createTestRoom()
+    updateSettings(ROOM_ID, { disableVoting: true })
+    expect(room.disableVoting).toBe(true)
+    expect(room.name).toBe('Room')
+
+    updateSettings(ROOM_ID, { disableVoting: false })
+    expect(room.disableVoting).toBe(false)
+  })
+
+  it('reflects disableVoting in the public room state sent to clients', () => {
+    const room = createTestRoom()
+    updateSettings(ROOM_ID, { disableVoting: true })
+
+    expect(toPublicRoomState(room).disableVoting).toBe(true)
+    expect(toPublicRoomStateForOwner(room).disableVoting).toBe(true)
+
+    updateSettings(ROOM_ID, { disableVoting: false })
+    expect(toPublicRoomState(room).disableVoting).toBe(false)
+  })
+})
+
+describe('roomService settings — maxSongsPerUser', () => {
+  it('defaults new rooms to unlimited (0)', () => {
+    const room = createTestRoom()
+    expect(room.maxSongsPerUser).toBe(0)
+  })
+
+  it('updates the maxSongsPerUser value without touching other fields', () => {
+    const room = createTestRoom()
+    updateSettings(ROOM_ID, { maxSongsPerUser: 5 })
+    expect(room.maxSongsPerUser).toBe(5)
+    expect(room.name).toBe('Room')
+    expect(room.disableVoting).toBe(false)
+
+    updateSettings(ROOM_ID, { maxSongsPerUser: 0 })
+    expect(room.maxSongsPerUser).toBe(0)
+  })
+
+  it('reflects maxSongsPerUser in the public room state sent to clients', () => {
+    const room = createTestRoom()
+    updateSettings(ROOM_ID, { maxSongsPerUser: 3 })
+
+    expect(toPublicRoomState(room).maxSongsPerUser).toBe(3)
+    expect(toPublicRoomStateForOwner(room).maxSongsPerUser).toBe(3)
+
+    updateSettings(ROOM_ID, { maxSongsPerUser: 0 })
+    expect(toPublicRoomState(room).maxSongsPerUser).toBe(0)
   })
 })

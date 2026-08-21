@@ -32,6 +32,8 @@ export interface ServerToClientEvents {
     hasPassword: boolean
     password?: string | null
     audioQuality: AudioQuality
+    disableVoting?: boolean
+    maxSongsPerUser?: number
   }) => void
   [EVENTS.ROOM_LIST_UPDATE]: (rooms: RoomListItem[]) => void
   [EVENTS.ROOM_ROLE_CHANGED]: (data: { userId: string; role: UserRole }) => void
@@ -82,7 +84,13 @@ export interface ClientToServerEvents {
   [EVENTS.ROOM_JOIN]: (data: { roomId: string; nickname: string; password?: string; rejoinToken?: string }) => void
   [EVENTS.ROOM_LEAVE]: () => void
   [EVENTS.ROOM_LIST]: () => void
-  [EVENTS.ROOM_SETTINGS]: (data: { name?: string; password?: string | null; audioQuality?: AudioQuality }) => void
+  [EVENTS.ROOM_SETTINGS]: (data: {
+    name?: string
+    password?: string | null
+    audioQuality?: AudioQuality
+    disableVoting?: boolean
+    maxSongsPerUser?: number
+  }) => void
   [EVENTS.ROOM_SET_ROLE]: (data: { userId: string; role: 'admin' | 'member' }) => void
 
   [EVENTS.PLAYER_PLAY]: (data?: { track?: Track }) => void

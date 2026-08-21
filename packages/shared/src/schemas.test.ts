@@ -50,6 +50,28 @@ describe('shared schemas', () => {
     expect(voteStartSchema.safeParse({ action: 'play-track', payload: { trackId: '' } }).success).toBe(false)
   })
 
+  it('preserves track title/cover for play-track and remove-track votes', () => {
+    const play = voteStartSchema.safeParse({
+      action: 'play-track',
+      payload: { trackId: 'abc', trackTitle: 'song name', cover: 'https://x/y.jpg', thumbnailCover: 'https://x/t.jpg' },
+    })
+    expect(play.success).toBe(true)
+    // 关键：服务端解析后必须保留 trackTitle / cover，否则投票窗口无法显示歌曲
+    expect((play.data as { payload: { trackTitle: string; cover: string; thumbnailCover: string } }).payload).toEqual({
+      trackId: 'abc',
+      trackTitle: 'song name',
+      cover: 'https://x/y.jpg',
+      thumbnailCover: 'https://x/t.jpg',
+    })
+
+    const remove = voteStartSchema.safeParse({ action: 'remove-track', payload: { trackId: 'abc', trackTitle: 'song name' } })
+    expect(remove.success).toBe(true)
+    // trackTitle 缺失应通过校验失败（避免投票窗口拿到无名歌曲）
+    expect(
+      voteStartSchema.safeParse({ action: 'remove-track', payload: { trackId: 'abc' } }).success,
+    ).toBe(false)
+  })
+
   it('bounds music resource IDs and numeric options', () => {
     expect(urlQuerySchema.safeParse({ source: 'netease', urlId: 'id', bitrate: 320 }).success).toBe(true)
     expect(urlQuerySchema.safeParse({ source: 'netease', urlId: 'x'.repeat(201), bitrate: 320 }).success).toBe(false)

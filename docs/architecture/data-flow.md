@@ -91,6 +91,8 @@ interface RoomState {
   currentTrack: Track | null
   playState: PlayState
   playMode: PlayMode
+  disableVoting: boolean // 房主开启后普通成员无法发起投票（下一首、切换循环等）
+  maxSongsPerUser: number // 单个听众最多点选歌曲数（0 = 不限制，上不封顶）
 }
 
 // 播放状态（含服务端时间戳用于同步校准）
@@ -214,6 +216,7 @@ Conductor（当前 `hostId` 对应用户）**自适应频率**上报当前播放
 - Member 拥有点歌权限；当房间当前没有歌曲时，向空队列添加歌曲会触发服务端的系统自动播放，这不是 Member 直接获得 Player 控制权限
 - **指定播放**：播放列表工具栏提供 Play 按钮，Owner/Admin 直接 emit `player:play`；Member 通过 `vote:start { action: 'play-track', payload: { trackId, trackTitle } }` 投票播放
 - **投票移除**：播放列表工具栏的删除按钮对所有用户可见，Owner/Admin 直接 emit `queue:remove`；Member 通过 `vote:start { action: 'remove-track', payload: { trackId, trackTitle } }` 投票移除
+- `play-track` / `remove-track` 的投票 payload 需携带 `trackTitle`（必填）以及 `cover` / `thumbnailCover`（可选），服务端 `voteStartSchema` 会原样保留这些字段并随 `VoteState` 广播；投票横幅（`VoteBanner`）据此展示被操作歌曲的封面与《歌名》，使投票者清楚发起人的意图
 - 服务端 `queueService.getNextTrack(roomId, playMode)` 根据模式返回下一首；`getPreviousTrack` 在 `loop-all` 模式下支持尾→首回绕
 - 客户端 `PlayerControls` 提供循环切换按钮，带 `AnimatePresence` 图标过渡动画
 
@@ -229,6 +232,25 @@ Conductor（当前 `hostId` 对应用户）**自适应频率**上报当前播放
 | 无损 SQ | 999 kbps | 无损音质，通常需要 VIP 账号 |
 
 - **仅房主**可在房间设置中切换音质
+
+## 禁用投票（房间设置）
+
+- **仅房主**可在房间设置中开启「禁用投票」。
+- 开关对应房间字段 `room.disableVoting`（默认 `false`），通过 `room:settings` 事件由房主写入，并随 `room:state` / `room:settings` 下发全部成员。
+- 开启后，**普通成员（member）无法发起任何投票**（`vote:start` 的 `next` / `prev` / `pause` / `resume` / `set-mode` / `play-track` / `remove-track` 均被服务端拒绝，返回 `VOTING_DISABLED` 错误）。
+- **房主 / 管理员不受影响**：他们本就走直接控制路径（`player:next` 等），不经过投票，因此仍可正常控制播放。
+- 客户端在 `disableVoting` 开启且当前用户为非特权成员时，会禁用播放器与播放列表中的投票触发按钮，并在 tooltip 中提示「房主已禁用投票」。
+
+## 单个听众最多点选歌曲数（房间设置）
+
+- **仅房主**可在房间设置中设置「单个听众最多点选歌曲数」。
+- 对应房间字段 `room.maxSongsPerUser`（默认 `0`，即不限制、上不封顶），通过 `room:settings` 事件由房主写入，并随 `room:state` / `room:settings` 下发全部成员。
+- **0 = 不限制**（上不封顶）；正整数 `N` 表示同一位听众在队列中同时占用的歌曲数不得超过 `N` 首。
+- 计数维度为 `Track.requestedBy`（点歌人昵称，与服务端 `interleaveByRequester` 公平排序使用同一标识）：新增歌曲时，服务端统计队列中 `requestedBy` 与待加歌曲相同者已有数量，达到 `N` 即拒绝。
+- **生效入口**：`queueService.addTrack`（点歌）、`insertAfterCurrent`（置顶/插入当前曲后）、`addBatchTracks`（歌单批量导入）均在落库前检查该配额。批量导入会尽量加入，但最多加到「剩余配额」为止（先受 `QUEUE_MAX_SIZE` 约束，再受 `maxSongsPerUser` 约束）。
+- 超过上限时服务端返回 `USER_QUEUE_LIMIT` 错误（提示「你已点选过多歌曲，请等待播放后再点歌」）；队列满则返回 `QUEUE_FULL`。
+- 该限制对所有用户（含房主/管理员）一致生效，是一项队列 fairness 限制而非权限限制；`requestedBy` 为昵称维度，重名或改名可能被视为同一人。
+
 - 音质切换仅对**下一首歌**生效，当前播放不中断
 - 服务端 `playerService.playTrackInRoom()` 从 `room.audioQuality` 读取 bitrate，通过 `resolveStreamUrl()` 请求流 URL
 - **降级策略**：如果请求的 bitrate 获取不到（VIP 限制或平台不支持），自动逐级降低 bitrate 重试（999 → 320 → 192 → 128）

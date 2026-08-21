@@ -210,6 +210,8 @@ export function registerRoomController(io: TypedServer, socket: TypedSocket) {
         name: parsed.data.name,
         password: parsed.data.password,
         audioQuality: parsed.data.audioQuality,
+        disableVoting: parsed.data.disableVoting,
+        maxSongsPerUser: parsed.data.maxSongsPerUser,
       })
 
       const updatedRoom = roomRepo.get(ctx.roomId)
@@ -220,6 +222,8 @@ export function registerRoomController(io: TypedServer, socket: TypedSocket) {
         name: updatedRoom.name,
         hasPassword: updatedRoom.password !== null,
         audioQuality: updatedRoom.audioQuality,
+        disableVoting: updatedRoom.disableVoting,
+        maxSongsPerUser: updatedRoom.maxSongsPerUser,
       }
       // 给 owner 发送含密码的设置
       ctx.socket.emit(EVENTS.ROOM_SETTINGS, {

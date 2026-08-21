@@ -32,6 +32,8 @@ function makeRoom(playState: RoomData['playState'], currentTrack: Track | null =
     currentTrack,
     playState,
     playMode: 'sequential',
+    disableVoting: false,
+    maxSongsPerUser: 0,
   }
 }
 

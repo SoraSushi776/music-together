@@ -55,6 +55,12 @@ export const PlayerControls = memo(function PlayerControls({
   const canPlay = ability.can('play', 'Player')
   const canSetMode = ability.can('set-mode', 'Player')
   const canVote = ability.can('vote', 'Player')
+  // 房主/管理员拥有直接控制权（next 等），不会走投票逻辑；普通成员在房间禁用投票时无法投票。
+  const disableVoting = useRoomStore((s) => s.room?.disableVoting ?? false)
+  const isPrivileged = ability.can('next', 'Player')
+  const votingDisabledForMe = disableVoting && !isPrivileged
+  const canVoteNow = canVote && !votingDisabledForMe
+  const disabledHint = votingDisabledForMe ? '（房主已禁用投票）' : ''
   const [skipCooldown, setSkipCooldown] = useState<'next' | 'prev' | null>(null)
   const [playCooldown, setPlayCooldown] = useState(false)
   const [isSeeking, setIsSeeking] = useState(false)
@@ -92,7 +98,7 @@ export const PlayerControls = memo(function PlayerControls({
     if (skipCooldown === voteAction) return
     if (ability.can(voteAction, 'Player')) {
       action()
-    } else if (canVote) {
+    } else if (canVoteNow) {
       onStartVote(voteAction)
     }
     setSkipCooldown(voteAction)
@@ -105,7 +111,7 @@ export const PlayerControls = memo(function PlayerControls({
     if (canPlay) {
       if (isPlaying) onPause()
       else onPlay()
-    } else if (canVote) {
+    } else if (canVoteNow) {
       onStartVote(isPlaying ? 'pause' : 'resume')
     }
     setPlayCooldown(true)
@@ -118,7 +124,7 @@ export const PlayerControls = memo(function PlayerControls({
     const nextMode = PLAY_MODE_CYCLE[(currentIdx + 1) % PLAY_MODE_CYCLE.length]
     if (canSetMode) {
       socket.emit(EVENTS.PLAYER_SET_MODE, { mode: nextMode })
-    } else if (canVote) {
+    } else if (canVoteNow) {
       onStartVote('set-mode', { mode: nextMode })
     }
   }
@@ -168,7 +174,7 @@ export const PlayerControls = memo(function PlayerControls({
                     size="icon"
                     className="h-9 w-9 text-white/70 hover:bg-white/10"
                     onClick={handlePlayModeToggle}
-                    disabled={!canSetMode && !canVote}
+                    disabled={!canSetMode && !canVoteNow}
                     aria-label={modeConfig.label}
                   >
                     <AnimatePresence mode="wait" initial={false}>
@@ -185,7 +191,7 @@ export const PlayerControls = memo(function PlayerControls({
                   </Button>
                 </motion.div>
               </TooltipTrigger>
-              <TooltipContent>{modeConfig.label}</TooltipContent>
+              <TooltipContent>{modeConfig.label}{disabledHint}</TooltipContent>
             </Tooltip>
           </div>
 
@@ -198,7 +204,7 @@ export const PlayerControls = memo(function PlayerControls({
                     variant="ghost"
                     size="icon"
                     className="h-9 w-9 text-white/70 hover:bg-white/10"
-                    disabled={disabled || skipCooldown === 'prev'}
+                    disabled={disabled || skipCooldown === 'prev' || (votingDisabledForMe && !ability.can('prev', 'Player'))}
                     onClick={() => handleSkip(onPrev, 'prev')}
                     aria-label="上一首"
                   >
@@ -206,7 +212,7 @@ export const PlayerControls = memo(function PlayerControls({
                   </Button>
                 </motion.div>
               </TooltipTrigger>
-              <TooltipContent>上一首</TooltipContent>
+              <TooltipContent>上一首{disabledHint}</TooltipContent>
             </Tooltip>
 
             <Tooltip delayDuration={300}>
@@ -216,7 +222,7 @@ export const PlayerControls = memo(function PlayerControls({
                     variant="ghost"
                     size="icon"
                     className="h-14 w-14 rounded-full bg-white/20 text-white/90 hover:bg-white/30 hover:text-white"
-                    disabled={disabled || playCooldown}
+                    disabled={disabled || playCooldown || (votingDisabledForMe && !canPlay)}
                     onClick={handlePlayPause}
                     aria-label={isPlaying ? '暂停' : '播放'}
                   >
@@ -228,7 +234,7 @@ export const PlayerControls = memo(function PlayerControls({
                   </Button>
                 </motion.div>
               </TooltipTrigger>
-              <TooltipContent>{isPlaying ? '暂停' : '播放'}</TooltipContent>
+              <TooltipContent>{isPlaying ? '暂停' : '播放'}{disabledHint}</TooltipContent>
             </Tooltip>
 
             <Tooltip delayDuration={300}>
@@ -238,7 +244,7 @@ export const PlayerControls = memo(function PlayerControls({
                     variant="ghost"
                     size="icon"
                     className="h-9 w-9 text-white/70 hover:bg-white/10"
-                    disabled={disabled || skipCooldown === 'next'}
+                    disabled={disabled || skipCooldown === 'next' || (votingDisabledForMe && !ability.can('next', 'Player'))}
                     onClick={() => handleSkip(onNext, 'next')}
                     aria-label="下一首"
                   >
@@ -246,7 +252,7 @@ export const PlayerControls = memo(function PlayerControls({
                   </Button>
                 </motion.div>
               </TooltipTrigger>
-              <TooltipContent>下一首</TooltipContent>
+              <TooltipContent>下一首{disabledHint}</TooltipContent>
             </Tooltip>
           </div>
 

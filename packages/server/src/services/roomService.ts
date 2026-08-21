@@ -173,6 +173,8 @@ export function createRoom(
       revision: 0,
     },
     playMode: 'loop-all',
+    disableVoting: false,
+    maxSongsPerUser: 0,
   }
 
   roomRepo.set(roomId, room)
@@ -302,7 +304,13 @@ export function listRooms(): RoomListItem[] {
 
 export function updateSettings(
   roomId: string,
-  settings: { name?: string; password?: string | null; audioQuality?: AudioQuality },
+  settings: {
+    name?: string
+    password?: string | null
+    audioQuality?: AudioQuality
+    disableVoting?: boolean
+    maxSongsPerUser?: number
+  },
 ): void {
   const room = roomRepo.get(roomId)
   if (!room) return
@@ -318,6 +326,16 @@ export function updateSettings(
 
   if (settings.audioQuality !== undefined) {
     room.audioQuality = settings.audioQuality
+  }
+
+  // disableVoting: boolean -> toggle voting restriction; undefined -> no change
+  if (settings.disableVoting !== undefined) {
+    room.disableVoting = settings.disableVoting
+  }
+
+  // maxSongsPerUser: number -> per-listener queue quota (0 = unlimited); undefined -> no change
+  if (settings.maxSongsPerUser !== undefined) {
+    room.maxSongsPerUser = settings.maxSongsPerUser
   }
 }
 

@@ -63,6 +63,8 @@ export function useRoomState() {
       hasPassword: boolean
       password?: string | null
       audioQuality: AudioQuality
+      disableVoting?: boolean
+      maxSongsPerUser?: number
     }) => {
       useRoomStore.getState().updateRoom(settings)
       // 存储密码明文（服务端广播）
