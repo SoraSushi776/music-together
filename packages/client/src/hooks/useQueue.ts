@@ -21,7 +21,9 @@ export function useQueue() {
 
   const reorderTracks = useCallback((trackIds: string[]) => socket.emit(EVENTS.QUEUE_REORDER, { trackIds }), [socket])
 
+  const shuffleQueue = useCallback(() => socket.emit(EVENTS.QUEUE_SHUFFLE), [socket])
+
   const clearQueue = useCallback(() => socket.emit(EVENTS.QUEUE_CLEAR), [socket])
 
-  return { addTrack, insertAfterCurrent, addBatchTracks, removeTrack, reorderTracks, clearQueue }
+  return { addTrack, insertAfterCurrent, addBatchTracks, removeTrack, reorderTracks, shuffleQueue, clearQueue }
 }

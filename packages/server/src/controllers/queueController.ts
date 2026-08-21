@@ -156,6 +156,19 @@ export function registerQueueController(io: TypedServer, socket: TypedSocket) {
   )
 
   socket.on(
+    EVENTS.QUEUE_SHUFFLE,
+    withPermission('reorder', 'Queue', (ctx) => {
+      queueService.shuffleQueue(ctx.roomId)
+      io.to(ctx.roomId).emit(EVENTS.QUEUE_UPDATED, { queue: ctx.room.queue })
+
+      const msg = chatService.createSystemMessage(ctx.roomId, `${ctx.user.nickname} 打乱了播放列表`)
+      io.to(ctx.roomId).emit(EVENTS.CHAT_MESSAGE, msg)
+
+      logger.info(`Queue shuffled`, { roomId: ctx.roomId })
+    }),
+  )
+
+  socket.on(
     EVENTS.QUEUE_CLEAR,
     withPermission('remove', 'Queue', async (ctx) => {
       queueService.clearQueue(ctx.roomId)

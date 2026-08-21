@@ -13,7 +13,7 @@ import { useIsMobile } from '@/hooks/useIsMobile'
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppAbility } from '@/providers/AbilityProvider'
-import { ArrowUpToLine, ChevronDown, ChevronUp, ListX, Music, Play, Trash2, User, X } from 'lucide-react'
+import { ArrowUpToLine, ChevronDown, ChevronUp, ListX, Music, Play, Shuffle, Trash2, User, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { MarqueeText } from '@/components/ui/marquee-text'
 import type { MusicSource } from '@music-together/shared'
@@ -31,10 +31,18 @@ interface QueueDrawerProps {
   onOpenChange: (open: boolean) => void
   onRemoveFromQueue: (trackId: string) => void
   onReorderQueue: (trackIds: string[]) => void
+  onShuffleQueue: () => void
   onClearQueue: () => void
 }
 
-export function QueueDrawer({ open, onOpenChange, onRemoveFromQueue, onReorderQueue, onClearQueue }: QueueDrawerProps) {
+export function QueueDrawer({
+  open,
+  onOpenChange,
+  onRemoveFromQueue,
+  onReorderQueue,
+  onShuffleQueue,
+  onClearQueue,
+}: QueueDrawerProps) {
   const queue = useRoomStore((s) => s.room?.queue ?? EMPTY_QUEUE)
   const currentTrack = usePlayerStore((s) => s.currentTrack)
   const { socket } = useSocketContext()
@@ -68,6 +76,11 @@ export function QueueDrawer({ open, onOpenChange, onRemoveFromQueue, onReorderQu
     },
     [],
   )
+
+  const handleShuffle = useCallback(() => {
+    onShuffleQueue()
+    toast.success('已打乱播放列表，同一个人的歌不会再扎堆啦')
+  }, [onShuffleQueue])
 
   const handleClear = useCallback(() => {
     if (!confirmClear) {
@@ -175,6 +188,22 @@ export function QueueDrawer({ open, onOpenChange, onRemoveFromQueue, onReorderQu
               播放列表 ({queue.length})
             </DrawerTitle>
             <div className="flex items-center gap-1">
+              {canReorder && queue.length > 2 && (
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={handleShuffle}
+                      aria-label="打乱播放列表"
+                    >
+                      <Shuffle className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>打乱播放列表（同一人点的歌会分散开）</TooltipContent>
+                </Tooltip>
+              )}
               {canRemove && queue.length > 0 && (
                 <Tooltip delayDuration={300}>
                   <TooltipTrigger asChild>

@@ -9,7 +9,9 @@ import {
   getPreviousTrack,
   getSuccessorAfterRemoval,
   insertAfterCurrent,
+  interleaveByRequester,
   reorderTracks,
+  shuffleQueue,
 } from './queueService.js'
 
 function makeTrack(id: string): Track {
@@ -24,6 +26,10 @@ function makeTrack(id: string): Track {
     sourceId: id,
     urlId: id,
   }
+}
+
+function makeRequestedTrack(id: string, requestedBy: string): Track {
+  return { ...makeTrack(id), requestedBy }
 }
 
 function makeRoom(queue: Track[], currentTrack: Track | null = null): RoomData {
@@ -114,5 +120,153 @@ describe('queueService', () => {
     expect(getPreviousTrack('ROOM01')).toBeNull()
     room.playMode = 'loop-all'
     expect(getPreviousTrack('ROOM01')?.id).toBe('b')
+  })
+})
+
+describe('interleaveByRequester', () => {
+  it('spreads one requester’s songs across other requesters’ songs', () => {
+    // 人A × 3 followed by 人B × 1 and 人C × 1 (the README shuffle scenario)
+    const tracks = [
+      makeRequestedTrack('a1', 'A'),
+      makeRequestedTrack('a2', 'A'),
+      makeRequestedTrack('a3', 'A'),
+      makeRequestedTrack('b1', 'B'),
+      makeRequestedTrack('c1', 'C'),
+    ]
+
+    const result = interleaveByRequester(tracks)
+
+    expect(result).toHaveLength(tracks.length)
+    expect(result.map((t) => t.id).sort()).toEqual(['a1', 'a2', 'a3', 'b1', 'c1'])
+    // No two adjacent tracks share a requester (achievable here: 3 vs 1+1)
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i].requestedBy).not.toBe(result[i - 1].requestedBy)
+    }
+  })
+
+  it('never places the same requester twice in a row when interleaving is possible', () => {
+    const tracks = [
+      ...Array.from({ length: 4 }, (_, i) => makeRequestedTrack(`a${i}`, 'A')),
+      ...Array.from({ length: 3 }, (_, i) => makeRequestedTrack(`b${i}`, 'B')),
+      ...Array.from({ length: 3 }, (_, i) => makeRequestedTrack(`c${i}`, 'C')),
+    ]
+
+    const result = interleaveByRequester(tracks)
+
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i].requestedBy).not.toBe(result[i - 1].requestedBy)
+    }
+    // A's songs keep their relative order
+    const aIds = result.filter((t) => t.requestedBy === 'A').map((t) => t.id)
+    expect(aIds).toEqual(['a0', 'a1', 'a2', 'a3'])
+  })
+
+  it('minimizes clustering when one requester dominates', () => {
+    // A has 5, B and C have 1 each — perfect interleaving is impossible.
+    // Best achievable: at most ⌈5/(1+1+1)⌉ = 2 consecutive A tracks.
+    const tracks = [
+      ...Array.from({ length: 5 }, (_, i) => makeRequestedTrack(`a${i}`, 'A')),
+      makeRequestedTrack('b0', 'B'),
+      makeRequestedTrack('c0', 'C'),
+    ]
+
+    const result = interleaveByRequester(tracks)
+
+    let maxRun = 1
+    let run = 1
+    for (let i = 1; i < result.length; i++) {
+      run = result[i].requestedBy === result[i - 1].requestedBy ? run + 1 : 1
+      maxRun = Math.max(maxRun, run)
+    }
+    expect(maxRun).toBeLessThanOrEqual(2)
+  })
+
+  it('returns short queues and single-requester queues unchanged in content', () => {
+    const single = [makeRequestedTrack('a1', 'A'), makeRequestedTrack('a2', 'A'), makeRequestedTrack('a3', 'A')]
+    expect(interleaveByRequester(single).map((t) => t.id)).toEqual(['a1', 'a2', 'a3'])
+
+    const two = [makeRequestedTrack('a1', 'A'), makeRequestedTrack('b1', 'B')]
+    expect(interleaveByRequester(two).map((t) => t.id)).toEqual(['a1', 'b1'])
+  })
+
+  it('keeps no-adjacent-same-requester across random feasible distributions', () => {
+    // Property check: whenever no requester owns more than the rest + 1,
+    // interleaving without adjacent duplicates must always be achievable —
+    // regardless of random tie-breaks.
+    for (let seedCase = 0; seedCase < 50; seedCase++) {
+      const personCount = 2 + Math.floor(Math.random() * 4)
+      const tracks: Track[] = []
+      for (let person = 0; person < personCount; person++) {
+        const count = Math.floor(Math.random() * 5)
+        for (let i = 0; i < count; i++) {
+          tracks.push(makeRequestedTrack(`case${seedCase}-p${person}-t${i}`, `p${person}`))
+        }
+      }
+      if (tracks.length < 3) continue
+
+      const counts = new Map<string, number>()
+      for (const t of tracks) counts.set(t.requestedBy!, (counts.get(t.requestedBy!) ?? 0) + 1)
+      const maxCount = Math.max(...counts.values())
+      const feasible = maxCount <= tracks.length - maxCount + 1
+
+      const result = interleaveByRequester(tracks)
+      expect(result.map((t) => t.id).sort()).toEqual(tracks.map((t) => t.id).sort())
+      if (feasible) {
+        for (let i = 1; i < result.length; i++) {
+          expect(result[i].requestedBy).not.toBe(result[i - 1].requestedBy)
+        }
+      }
+    }
+  })
+})
+
+describe('shuffleQueue', () => {
+  it('keeps already-played tracks and the current one in place, interleaving the rest', () => {
+    const played = makeRequestedTrack('played', 'A')
+    const current = makeRequestedTrack('current', 'A')
+    const pending = [
+      makeRequestedTrack('a2', 'A'),
+      makeRequestedTrack('a3', 'A'),
+      makeRequestedTrack('b1', 'B'),
+      makeRequestedTrack('c1', 'C'),
+    ]
+    roomRepo.set('ROOM01', makeRoom([played, current, ...pending], current))
+
+    expect(shuffleQueue('ROOM01')).toBe(true)
+
+    const queue = roomRepo.get('ROOM01')!.queue
+    expect(queue.slice(0, 2).map((t) => t.id)).toEqual(['played', 'current'])
+    expect(queue.slice(2).map((t) => t.id).sort()).toEqual(['a2', 'a3', 'b1', 'c1'])
+    // Upcoming part: A's two songs are not adjacent (B and C can separate them)
+    const upcoming = queue.slice(2)
+    for (let i = 1; i < upcoming.length; i++) {
+      expect(upcoming[i].requestedBy).not.toBe(upcoming[i - 1].requestedBy)
+    }
+  })
+
+  it('shuffles the whole queue when nothing is playing', () => {
+    const tracks = [
+      makeRequestedTrack('a1', 'A'),
+      makeRequestedTrack('a2', 'A'),
+      makeRequestedTrack('a3', 'A'),
+      makeRequestedTrack('b1', 'B'),
+      makeRequestedTrack('c1', 'C'),
+    ]
+    roomRepo.set('ROOM01', makeRoom(tracks))
+
+    expect(shuffleQueue('ROOM01')).toBe(true)
+
+    const queue = roomRepo.get('ROOM01')!.queue
+    expect(queue).toHaveLength(tracks.length)
+    expect(queue.map((t) => t.id).sort()).toEqual(['a1', 'a2', 'a3', 'b1', 'c1'])
+    for (let i = 1; i < queue.length; i++) {
+      expect(queue[i].requestedBy).not.toBe(queue[i - 1].requestedBy)
+    }
+  })
+
+  it('is a no-op for rooms with two or fewer tracks', () => {
+    roomRepo.set('ROOM01', makeRoom([makeTrack('a'), makeTrack('b')]))
+    expect(shuffleQueue('ROOM01')).toBe(false)
+    expect(roomRepo.get('ROOM01')?.queue.map((t) => t.id)).toEqual(['a', 'b'])
   })
 })

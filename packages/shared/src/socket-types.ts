@@ -98,6 +98,7 @@ export interface ClientToServerEvents {
   [EVENTS.QUEUE_INSERT_AFTER_CURRENT]: (data: { track: Track }) => void
   [EVENTS.QUEUE_REMOVE]: (data: { trackId: string }) => void
   [EVENTS.QUEUE_REORDER]: (data: { trackIds: string[] }) => void
+  [EVENTS.QUEUE_SHUFFLE]: () => void
   [EVENTS.QUEUE_CLEAR]: () => void
 
   // Queue batch

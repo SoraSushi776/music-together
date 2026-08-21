@@ -45,7 +45,7 @@ export default function RoomPage() {
   const { socket, isConnected } = useSocketContext()
   const { leaveRoom, updateSettings, setUserRole } = useRoom()
   const { play, pause, seek, next, prev } = usePlayer()
-  const { addTrack, insertAfterCurrent, removeTrack, reorderTracks, clearQueue } = useQueue()
+  const { addTrack, insertAfterCurrent, removeTrack, reorderTracks, shuffleQueue, clearQueue } = useQueue()
 
   const room = useRoomStore((s) => s.room)
   const chatOpen = useChatStore((s) => s.isChatOpen)
@@ -357,6 +357,7 @@ export default function RoomPage() {
             onOpenChange={setQueueOpen}
             onRemoveFromQueue={removeTrack}
             onReorderQueue={reorderTracks}
+            onShuffleQueue={shuffleQueue}
             onClearQueue={clearQueue}
           />
           <SettingsDialog

@@ -32,6 +32,7 @@ export const EVENTS = {
   QUEUE_ADD: 'queue:add',
   QUEUE_REMOVE: 'queue:remove',
   QUEUE_REORDER: 'queue:reorder',
+  QUEUE_SHUFFLE: 'queue:shuffle',
   QUEUE_CLEAR: 'queue:clear',
   QUEUE_UPDATED: 'queue:updated',
 

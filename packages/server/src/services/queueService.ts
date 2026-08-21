@@ -100,6 +100,122 @@ export function reorderTracks(roomId: string, trackIds: string[]): void {
   room.queue = reordered
 }
 
+interface RequesterGroup {
+  key: string
+  tracks: Track[]
+}
+
+/**
+ * Interleave tracks so that consecutive tracks come from different requesters
+ * whenever possible. Original order is preserved within each requester's
+ * songs; tie-breaks are random so repeated shuffles vary.
+ *
+ * Two strategies:
+ * - Feasible case (no requester owns more than the rest combined + 1):
+ *   greedy interleave — always place from the largest eligible group
+ *   (different requester than the last placed track).
+ * - Dominant case: the dominant requester's songs are split into evenly
+ *   sized runs (ceil(M / (rest + 1)) each), with other songs as separators,
+ *   which minimizes the longest same-requester streak.
+ */
+export function interleaveByRequester(tracks: Track[]): Track[] {
+  if (tracks.length <= 2) return [...tracks]
+
+  const groups = new Map<string, Track[]>()
+  for (const track of tracks) {
+    const key = track.requestedBy ?? '__anonymous__'
+    const group = groups.get(key)
+    if (group) group.push(track)
+    else groups.set(key, [track])
+  }
+  if (groups.size <= 1) return [...tracks]
+
+  const entries: RequesterGroup[] = [...groups.entries()].map(([key, list]) => ({ key, tracks: [...list] }))
+  entries.sort((a, b) => b.tracks.length - a.tracks.length)
+
+  const dominant = entries[0]
+  const others = entries.slice(1)
+  const othersTotal = tracks.length - dominant.tracks.length
+
+  if (dominant.tracks.length > othersTotal + 1) {
+    return interleaveDominant(dominant, others)
+  }
+  return greedyInterleave(entries)
+}
+
+/** Greedy interleave: largest eligible group first, random pick among ties. */
+function greedyInterleave(entries: RequesterGroup[]): Track[] {
+  const pending = entries.map((g) => ({ ...g, tracks: [...g.tracks] }))
+  const result: Track[] = []
+  let lastKey: string | null = null
+
+  while (pending.length > 0) {
+    // Eligible groups: a different requester than the last placed track.
+    // When every remaining song belongs to that requester, clustering is
+    // unavoidable and we take from it anyway.
+    const eligible = pending.filter((g) => g.key !== lastKey)
+    const pool = eligible.length > 0 ? eligible : pending
+
+    const maxCount = Math.max(...pool.map((g) => g.tracks.length))
+    const candidates = pool.filter((g) => g.tracks.length === maxCount)
+    const group = candidates[Math.floor(Math.random() * candidates.length)]
+    if (!group) break
+
+    const track = group.tracks.shift()
+    if (track) {
+      result.push(track)
+      lastKey = group.key
+    }
+    if (group.tracks.length === 0) pending.splice(pending.indexOf(group), 1)
+  }
+
+  return result
+}
+
+/**
+ * Dominant case: split the dominant requester's songs into evenly sized runs
+ * and use every other song as a separator between runs.
+ */
+function interleaveDominant(dominant: RequesterGroup, others: RequesterGroup[]): Track[] {
+  const separators = others.flatMap((g) => g.tracks)
+  const runCount = separators.length + 1
+  const runSize = Math.ceil(dominant.tracks.length / runCount)
+
+  const result: Track[] = []
+  let cursor = 0
+  for (let run = 0; run < runCount; run++) {
+    const take = Math.min(runSize, dominant.tracks.length - cursor)
+    result.push(...dominant.tracks.slice(cursor, cursor + take))
+    cursor += take
+    if (run < runCount - 1 && run < separators.length) {
+      result.push(separators[run])
+    }
+  }
+  return result
+}
+
+/**
+ * Shuffle the queue by interleaving requesters so one person's songs don't
+ * play back-to-back. Tracks up to and including the currently playing one
+ * keep their positions; only the upcoming part is shuffled. When nothing is
+ * playing, the whole queue is shuffled.
+ *
+ * @returns true when the room exists and has a shufflable queue.
+ */
+export function shuffleQueue(roomId: string): boolean {
+  const room = roomRepo.get(roomId)
+  if (!room || room.queue.length <= 2) return false
+
+  const effectiveTrack = room.pendingPlayback?.track ?? room.currentTrack
+  const currentIndex = effectiveTrack ? room.queue.findIndex((t) => t.id === effectiveTrack.id) : -1
+
+  const head = currentIndex >= 0 ? room.queue.slice(0, currentIndex + 1) : []
+  const tail = room.queue.slice(head.length)
+
+  room.queue = [...head, ...interleaveByRequester(tail)]
+  return true
+}
+
 /**
  * Get the next track based on the play mode.
  *

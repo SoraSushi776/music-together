@@ -173,7 +173,7 @@ src/
 │   ├── roomService.ts          #   房间 CRUD + 角色管理 + 加入校验（validateJoinRequest）
 │   ├── roomLifecycleService.ts #   房间生命周期定时器（空置删除）+ 防抖广播
 │   ├── playerService.ts        #   已提交/待执行播放状态 + revision 边界 + 流 URL 解析 + 切歌防抖 + 加入播放同步
-│   ├── queueService.ts         #   队列操作（reorder 保留未包含曲目防丢歌，getNextTrack 支持 4 种播放模式，clearQueue 清空，addBatchTracks 批量添加）
+│   ├── queueService.ts         #   队列操作（reorder 保留未包含曲目防丢歌，getNextTrack 支持 4 种播放模式，clearQueue 清空，addBatchTracks 批量添加，shuffleQueue 按点歌人交错打乱防止同人歌曲扎堆）
 │   ├── chatService.ts          #   聊天消息处理 + HTML 转义（含系统消息）
 │   ├── syncService.ts          #   播放位置估算工具（estimateCurrentTime）
 │   ├── musicProvider.ts        #   音乐数据聚合（3 层引用式 LRU 缓存 + 外部 API 超时保护 + 歌单分页获取；Netease 歌单使用 ncmApi.playlist_track_all 分块请求突破 1000 首限制，Kugou 用户歌单使用原生 API (get_other_list_file_nofilt) + Meting fallback，Tencent 使用 Meting 原始模式保留 VIP/时长字段）
