@@ -90,6 +90,7 @@ function cancelPendingPlayback(room: RoomData): void {
 }
 
 function schedulePlaybackCommit(
+  io: TypedServer,
   room: RoomData,
   type: NonNullable<RoomData['pendingPlayback']>['type'],
   track: Track | null,
@@ -100,6 +101,7 @@ function schedulePlaybackCommit(
   const delay = Math.max(0, playState.serverTimeToExecute - Date.now())
   const timer = setTimeout(() => {
     if (room.pendingPlayback?.playState !== playState) return
+    const trackChanged = room.currentTrack !== track
     room.currentTrack = track
     room.playState = {
       isPlaying: playState.isPlaying,
@@ -108,6 +110,8 @@ function schedulePlaybackCommit(
       revision: playState.revision,
     }
     room.pendingPlayback = null
+    // Publish the committed track, including plays replaced by pause/seek/resume.
+    if (trackChanged) broadcastRoomList(io)
     onCommit?.()
   }, delay)
   room.pendingPlayback = { type, track, playState, timer }
@@ -160,15 +164,23 @@ export function playTrackInRoom(io: TypedServer, roomId: string, track: Track): 
 }
 
 /**
- * Auto-play when the queue was empty. Re-checks `room.currentTrack` inside
- * the mutex so that concurrent QUEUE_ADD handlers don't both trigger playback
- * (the second caller sees the track set by the first and bails out).
+ * Start an idle queue, skipping unavailable songs until one can play.
+ * A snapshot bounds retries; removed songs are checked again before resolution.
+ * The mutex and pending-state check prevent concurrent additions from restarting
+ * the song selected by an earlier caller.
  */
 export function autoPlayIfEmpty(io: TypedServer, roomId: string, track: Track): Promise<boolean> {
   return withPlayMutex(roomId, async () => {
     const room = roomRepo.get(roomId)
     if (!room || getLatestPlayback(room).track) return false
-    return _playTrackInRoom(io, roomId, track)
+    const candidates = [track, ...room.queue.filter((item) => item.id !== track.id)]
+    for (const candidate of candidates) {
+      const currentRoom = roomRepo.get(roomId)
+      if (!currentRoom || getLatestPlayback(currentRoom).track) return false
+      if (!currentRoom.queue.some((item) => item.id === candidate.id)) continue
+      if (await _playTrackInRoom(io, roomId, candidate)) return true
+    }
+    return false
   })
 }
 
@@ -335,15 +347,12 @@ async function _playTrackInRoom(io: TypedServer, roomId: string, track: Track): 
     roomId,
     scheduleTime,
   )
-  schedulePlaybackCommit(room, 'play', resolved, playState)
+  schedulePlaybackCommit(io, room, 'play', resolved, playState)
 
   io.to(roomId).emit(EVENTS.PLAYER_PLAY, {
     track: resolved,
     playState,
   })
-
-  // 通知大厅用户当前播放曲目变化
-  broadcastRoomList(io)
 
   logger.info(`Playing: ${resolved.title} in room ${roomId}`, { roomId })
   return true
@@ -366,7 +375,7 @@ export function resumeTrack(io: TypedServer, roomId: string, _initiatorSocket?: 
     roomId,
     scheduleTime,
   )
-  schedulePlaybackCommit(room, 'resume', latest.track, playState)
+  schedulePlaybackCommit(io, room, 'resume', latest.track, playState)
   io.to(roomId).emit(EVENTS.PLAYER_RESUME, { playState })
 }
 
@@ -397,7 +406,7 @@ export function pauseTrack(io: TypedServer, roomId: string, _initiatorSocket?: T
     roomId,
     scheduleTime,
   )
-  schedulePlaybackCommit(room, 'pause', latest.track, playState)
+  schedulePlaybackCommit(io, room, 'pause', latest.track, playState)
   io.to(roomId).emit(EVENTS.PLAYER_PAUSE, { playState })
 }
 
@@ -423,7 +432,7 @@ export function seekTrack(io: TypedServer, roomId: string, currentTime: number, 
     roomId,
     scheduleTime,
   )
-  schedulePlaybackCommit(room, 'seek', latest.track, playState)
+  schedulePlaybackCommit(io, room, 'seek', latest.track, playState)
   io.to(roomId).emit(EVENTS.PLAYER_SEEK, { playState })
 }
 
@@ -468,9 +477,8 @@ export function stopPlayback(io: TypedServer, roomId: string): void {
     roomId,
     scheduleTime,
   )
-  schedulePlaybackCommit(room, 'stop', null, playState, () => {
+  schedulePlaybackCommit(io, room, 'stop', null, playState, () => {
     io.to(roomId).emit(EVENTS.ROOM_STATE, toPublicRoomState(room))
-    broadcastRoomList(io)
   })
   io.to(roomId).emit(EVENTS.PLAYER_PAUSE, { playState })
 }

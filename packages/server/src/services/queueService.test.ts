@@ -58,6 +58,8 @@ function makeRoom(queue: Track[], currentTrack: Track | null = null): RoomData {
 
 afterEach(() => {
   roomRepo.delete('ROOM01')
+  vi.clearAllTimers()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -342,97 +344,65 @@ describe('queueService — removeTracksByRequester (auto-remove on leave)', () =
 })
 
 describe('interleaveByRequester', () => {
-  it('spreads one requester’s songs across other requesters’ songs', () => {
-    // 人A × 3 followed by 人B × 1 and 人C × 1 (the README shuffle scenario)
-    const tracks = [
-      makeRequestedTrack('a1', 'A'),
-      makeRequestedTrack('a2', 'A'),
-      makeRequestedTrack('a3', 'A'),
-      makeRequestedTrack('b1', 'B'),
-      makeRequestedTrack('c1', 'C'),
-    ]
+  it('gives every requester a turn before starting the next round', () => {
+    // Keep Fisher-Yates in input order so the reported regression is readable.
+    vi.spyOn(Math, 'random').mockReturnValue(0.999)
+    const tracks = [...'AAABBBCCCDDE'].map((person, i) => makeRequestedTrack(String(i), person))
+    const originalIds = tracks.map((t) => t.id)
 
     const result = interleaveByRequester(tracks)
 
-    expect(result).toHaveLength(tracks.length)
-    expect(result.map((t) => t.id).sort()).toEqual(['a1', 'a2', 'a3', 'b1', 'c1'])
-    // No two adjacent tracks share a requester (achievable here: 3 vs 1+1)
-    for (let i = 1; i < result.length; i++) {
-      expect(result[i].requestedBy).not.toBe(result[i - 1].requestedBy)
+    expect(result.map((t) => t.requestedBy).join('')).toBe('ABCDEABCDABC')
+    expect(tracks.map((t) => t.id)).toEqual(originalIds)
+    expect(result.map((t) => t.id).sort()).toEqual([...originalIds].sort())
+    for (const person of 'ABCDE') {
+      expect(result.filter((t) => t.requestedBy === person).map((t) => t.id)).toEqual(
+        tracks.filter((t) => t.requestedBy === person).map((t) => t.id),
+      )
     }
   })
 
-  it('never places the same requester twice in a row when interleaving is possible', () => {
-    const tracks = [
-      ...Array.from({ length: 4 }, (_, i) => makeRequestedTrack(`a${i}`, 'A')),
-      ...Array.from({ length: 3 }, (_, i) => makeRequestedTrack(`b${i}`, 'B')),
-      ...Array.from({ length: 3 }, (_, i) => makeRequestedTrack(`c${i}`, 'C')),
-    ]
+  it('lets one-song listeners participate in the first round even if one listener dominates', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.999)
+    const tracks = [...'AAAAABC'].map((person, i) => makeRequestedTrack(String(i), person))
+    expect(interleaveByRequester(tracks).map((t) => t.requestedBy).join('')).toBe('ABCAAAA')
+  })
 
-    const result = interleaveByRequester(tracks)
+  it('randomizes requester order once and keeps the same turns in later rounds', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const tracks = [...'AABBCC'].map((person, i) => makeRequestedTrack(String(i), person))
+    expect(interleaveByRequester(tracks).map((t) => t.requestedBy).join('')).toBe('BCABCA')
+  })
 
-    for (let i = 1; i < result.length; i++) {
-      expect(result[i].requestedBy).not.toBe(result[i - 1].requestedBy)
+  it('preserves empty, short and single-requester queues', () => {
+    for (const people of ['', 'A', 'AB', 'AAA']) {
+      const tracks = [...people].map((person, i) => makeRequestedTrack(String(i), person))
+      expect(interleaveByRequester(tracks)).toEqual(tracks)
     }
-    // A's songs keep their relative order
-    const aIds = result.filter((t) => t.requestedBy === 'A').map((t) => t.id)
-    expect(aIds).toEqual(['a0', 'a1', 'a2', 'a3'])
   })
 
-  it('minimizes clustering when one requester dominates', () => {
-    // A has 5, B and C have 1 each — perfect interleaving is impossible.
-    // Best achievable: at most ⌈5/(1+1+1)⌉ = 2 consecutive A tracks.
-    const tracks = [
-      ...Array.from({ length: 5 }, (_, i) => makeRequestedTrack(`a${i}`, 'A')),
-      makeRequestedTrack('b0', 'B'),
-      makeRequestedTrack('c0', 'C'),
-    ]
-
-    const result = interleaveByRequester(tracks)
-
-    let maxRun = 1
-    let run = 1
-    for (let i = 1; i < result.length; i++) {
-      run = result[i].requestedBy === result[i - 1].requestedBy ? run + 1 : 1
-      maxRun = Math.max(maxRun, run)
-    }
-    expect(maxRun).toBeLessThanOrEqual(2)
+  it('treats tracks without a requester as one group', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.999)
+    const tracks = [makeTrack('unknown1'), makeTrack('unknown2'), makeRequestedTrack('a1', 'A')]
+    expect(interleaveByRequester(tracks).map((t) => t.id)).toEqual(['unknown1', 'a1', 'unknown2'])
   })
 
-  it('returns short queues and single-requester queues unchanged in content', () => {
-    const single = [makeRequestedTrack('a1', 'A'), makeRequestedTrack('a2', 'A'), makeRequestedTrack('a3', 'A')]
-    expect(interleaveByRequester(single).map((t) => t.id)).toEqual(['a1', 'a2', 'a3'])
-
-    const two = [makeRequestedTrack('a1', 'A'), makeRequestedTrack('b1', 'B')]
-    expect(interleaveByRequester(two).map((t) => t.id)).toEqual(['a1', 'b1'])
-  })
-
-  it('keeps no-adjacent-same-requester across random feasible distributions', () => {
-    // Property check: whenever no requester owns more than the rest + 1,
-    // interleaving without adjacent duplicates must always be achievable —
-    // regardless of random tie-breaks.
-    for (let seedCase = 0; seedCase < 50; seedCase++) {
-      const personCount = 2 + Math.floor(Math.random() * 4)
-      const tracks: Track[] = []
-      for (let person = 0; person < personCount; person++) {
-        const count = Math.floor(Math.random() * 5)
-        for (let i = 0; i < count; i++) {
-          tracks.push(makeRequestedTrack(`case${seedCase}-p${person}-t${i}`, `p${person}`))
-        }
-      }
-      if (tracks.length < 3) continue
-
-      const counts = new Map<string, number>()
-      for (const t of tracks) counts.set(t.requestedBy!, (counts.get(t.requestedBy!) ?? 0) + 1)
-      const maxCount = Math.max(...counts.values())
-      const feasible = maxCount <= tracks.length - maxCount + 1
-
+  it('takes exactly one song per active requester per round for uneven distributions', () => {
+    // Deterministic coverage of 256 count distributions, including empty groups.
+    for (let distribution = 0; distribution < 256; distribution++) {
+      const counts = Array.from({ length: 4 }, (_, i) => (distribution >> (i * 2)) & 3)
+      const tracks = counts.flatMap((count, person) =>
+        Array.from({ length: count }, (_, i) => makeRequestedTrack(`${person}-${i}`, String(person))),
+      )
       const result = interleaveByRequester(tracks)
       expect(result.map((t) => t.id).sort()).toEqual(tracks.map((t) => t.id).sort())
-      if (feasible) {
-        for (let i = 1; i < result.length; i++) {
-          expect(result[i].requestedBy).not.toBe(result[i - 1].requestedBy)
-        }
+      let offset = 0
+      for (let round = 0; round < Math.max(...counts); round++) {
+        const active = counts.flatMap((count, person) => count > round ? [String(person)] : [])
+        const batch = result.slice(offset, offset + active.length)
+        expect(batch.map((t) => t.requestedBy).sort()).toEqual(active)
+        for (const t of batch) expect(t.id).toBe(`${t.requestedBy}-${round}`)
+        offset += active.length
       }
     }
   })
@@ -455,11 +425,9 @@ describe('shuffleQueue', () => {
     const queue = roomRepo.get('ROOM01')!.queue
     expect(queue.slice(0, 2).map((t) => t.id)).toEqual(['played', 'current'])
     expect(queue.slice(2).map((t) => t.id).sort()).toEqual(['a2', 'a3', 'b1', 'c1'])
-    // Upcoming part: A's two songs are not adjacent (B and C can separate them)
     const upcoming = queue.slice(2)
-    for (let i = 1; i < upcoming.length; i++) {
-      expect(upcoming[i].requestedBy).not.toBe(upcoming[i - 1].requestedBy)
-    }
+    expect(new Set(upcoming.slice(0, 3).map((t) => t.requestedBy))).toEqual(new Set(['A', 'B', 'C']))
+    expect(upcoming[3].requestedBy).toBe('A')
   })
 
   it('shuffles the whole queue when nothing is playing', () => {
@@ -477,9 +445,26 @@ describe('shuffleQueue', () => {
     const queue = roomRepo.get('ROOM01')!.queue
     expect(queue).toHaveLength(tracks.length)
     expect(queue.map((t) => t.id).sort()).toEqual(['a1', 'a2', 'a3', 'b1', 'c1'])
-    for (let i = 1; i < queue.length; i++) {
-      expect(queue[i].requestedBy).not.toBe(queue[i - 1].requestedBy)
+    expect(new Set(queue.slice(0, 3).map((t) => t.requestedBy))).toEqual(new Set(['A', 'B', 'C']))
+    expect(queue.slice(3).map((t) => t.requestedBy)).toEqual(['A', 'A'])
+  })
+
+  it('keeps the scheduled next track and everything before it fixed', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.999)
+    vi.useFakeTimers()
+    const current = makeRequestedTrack('current', 'A')
+    const scheduled = makeRequestedTrack('scheduled', 'A')
+    const tail = [...'AAABBBCCCDDE'].map((person, i) => makeRequestedTrack(String(i), person))
+    const data = makeRoom([current, scheduled, ...tail], current)
+    data.pendingPlayback = {
+      type: 'play', track: scheduled, timer: setTimeout(() => {}, 300),
+      playState: { ...data.playState, revision: 1, serverTimeToExecute: Date.now() + 300 },
     }
+    roomRepo.set('ROOM01', data)
+
+    expect(shuffleQueue('ROOM01')).toBe(true)
+    expect(data.queue.slice(0, 2)).toEqual([current, scheduled])
+    expect(data.queue.slice(2).map((t) => t.requestedBy).join('')).toBe('ABCDEABCDABC')
   })
 
   it('is a no-op for rooms with two or fewer tracks', () => {

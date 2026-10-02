@@ -90,7 +90,7 @@ export function QueueDrawer({
 
   const handleShuffle = useCallback(() => {
     onShuffleQueue()
-    toast.success('已打乱播放列表，同一个人的歌不会再扎堆啦')
+    toast.success('已按点歌人轮流排列播放列表')
   }, [onShuffleQueue])
 
   const handleClear = useCallback(() => {
@@ -213,7 +213,7 @@ export function QueueDrawer({
                       <Shuffle className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>打乱播放列表（同一人点的歌会分散开）</TooltipContent>
+                  <TooltipContent>打乱播放列表（每轮每人一首）</TooltipContent>
                 </Tooltip>
               )}
               {canRemove && queue.length > 0 && (

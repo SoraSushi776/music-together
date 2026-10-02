@@ -120,7 +120,7 @@ Controller → Service → Repository / Utils
 - **Service**：业务逻辑、跨领域编排、Socket 广播。关键服务职责拆分：
   - `roomService`：房间 CRUD + 角色管理 + 临时管理员协调（`reconcileRoomRoles`）+ conductor 选举（`electConductor`）+ 加入校验（`validateJoinRequest`）。Re-export `toPublicRoomState` 和 `broadcastRoomList` 以保持控制器调用方式不变。
   - `roomLifecycleService`：房间空置删除定时器 + 防抖广播。不依赖 `roomService`，消除循环依赖。API：`scheduleDeletion`、`cancelDeletionTimer`、`broadcastRoomList`、`clearAllTimers`。角色宽限期已移除（conductor 自动选举，无需 grace period）。
-  - `playerService`：播放状态管理 + 流 URL 解析 + 切歌防抖 + 加入播放同步（`syncPlaybackToSocket`）+ 房间清理（`cleanupRoom`）。`playTrackInRoom` 通过 per-room Promise 链互斥锁防止并发竞态。`playNextTrackInRoom` / `playPrevTrackInRoom` 将 debounce + 队列导航 + 播放统一封装在 mutex 内部。`autoPlayIfEmpty` 在 mutex 内重新检查 `room.currentTrack`，防止并发 QUEUE_ADD 双重自动播放。
+  - `playerService`：播放状态管理 + 流 URL 解析 + 切歌防抖 + 加入播放同步（`syncPlaybackToSocket`）+ 房间清理（`cleanupRoom`）。`playTrackInRoom` 通过 per-room Promise 链互斥锁防止并发竞态。`playNextTrackInRoom` / `playPrevTrackInRoom` 将 debounce + 队列导航 + 播放统一封装在 mutex 内部。`autoPlayIfEmpty` 在 mutex 内检查已提交及待执行曲目，依次跳过不可用候选，防止并发 QUEUE_ADD 双重自动播放；计划动作提交曲目变更后刷新大厅。
 - **Repository**：数据存取（当前为内存 Map，接口抽象，可替换为数据库）
 - **Utils**：纯函数工具（`toPublicRoomState` 等），无状态，可被任意层引用
 

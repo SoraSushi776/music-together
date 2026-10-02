@@ -1,12 +1,15 @@
-import type { Track } from '@music-together/shared'
+import { EVENTS, type Track } from '@music-together/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { roomRepo } from '../repositories/roomRepository.js'
 import { toPublicRoomState } from '../utils/roomUtils.js'
 import type { RoomData } from '../repositories/types.js'
+import { musicProvider } from './musicProvider.js'
+import { clearAllTimers } from './roomLifecycleService.js'
 import {
   autoPlayIfEmpty,
   cleanupRoom,
   pauseTrack,
+  playTrackInRoom,
   playNextTrackInRoom,
   playPrevTrackInRoom,
   resumeTrack,
@@ -16,6 +19,10 @@ import {
   syncPlaybackToSocket,
   validateConductorReport,
 } from './playerService.js'
+
+vi.mock('./musicProvider.js', () => ({
+  musicProvider: { getStreamUrl: vi.fn(), getCover: vi.fn() },
+}))
 
 const track: Track = {
   id: 'track-1',
@@ -61,9 +68,106 @@ function ioMock() {
 }
 
 afterEach(() => {
-  roomRepo.delete('ROOM01')
   cleanupRoom('ROOM01')
+  roomRepo.delete('ROOM01')
+  clearAllTimers()
   vi.useRealTimers()
+})
+
+describe('queue startup and lobby updates', () => {
+  function unavailable(id: string): Track {
+    // Kugou does not attempt cross-platform fallback. All provider calls are mocked.
+    return { ...track, id, source: 'kugou', sourceId: id, urlId: id, streamUrl: undefined }
+  }
+
+  it('skips unavailable first songs and starts the next playable item in an imported queue', async () => {
+    vi.useFakeTimers()
+    const data = room()
+    const first = unavailable('first')
+    const second = unavailable('second')
+    data.currentTrack = null
+    data.queue = [first, second, track]
+    roomRepo.set(data.id, data)
+    vi.mocked(musicProvider.getStreamUrl).mockResolvedValue(null)
+    const { io, emit } = ioMock()
+
+    expect(await autoPlayIfEmpty(io as never, data.id, first)).toBe(true)
+    expect(data.queue).toEqual([track])
+    expect(data.pendingPlayback?.track?.id).toBe(track.id)
+    expect(emit.mock.calls.filter(([event]) => event === EVENTS.PLAYER_PLAY)).toHaveLength(1)
+  })
+
+  it('finishes without scheduling playback when every imported song is unavailable', async () => {
+    const data = room()
+    data.currentTrack = null
+    data.queue = [unavailable('first'), unavailable('second')]
+    roomRepo.set(data.id, data)
+    vi.mocked(musicProvider.getStreamUrl).mockResolvedValue(null)
+    const { io, emit } = ioMock()
+
+    expect(await autoPlayIfEmpty(io as never, data.id, data.queue[0])).toBe(false)
+    expect(data.queue).toEqual([])
+    expect(data.pendingPlayback).toBeFalsy()
+    expect(emit.mock.calls.some(([event]) => event === EVENTS.PLAYER_PLAY)).toBe(false)
+  })
+
+  it('does not resolve or resurrect a queued song removed while startup is waiting', async () => {
+    vi.useFakeTimers()
+    const data = room()
+    const first = unavailable('first')
+    const removed = unavailable('removed')
+    data.currentTrack = null
+    data.queue = [first, removed, track]
+    roomRepo.set(data.id, data)
+    vi.mocked(musicProvider.getStreamUrl).mockImplementation(async () => {
+      data.queue = data.queue.filter((t) => t.id !== removed.id)
+      return null
+    })
+    const { io } = ioMock()
+
+    expect(await autoPlayIfEmpty(io as never, data.id, first)).toBe(true)
+    expect(musicProvider.getStreamUrl).not.toHaveBeenCalledWith('kugou', removed.urlId, expect.anything(), expect.anything())
+    expect(data.pendingPlayback?.track?.id).toBe(track.id)
+  })
+
+  it.each(['play', 'pause', 'seek', 'resume'] as const)(
+    'publishes the new lobby song after a pending play commits as %s',
+    async (action) => {
+      vi.useFakeTimers()
+      const data = room()
+      const next = { ...track, id: 'next', title: 'Next song' }
+      data.queue.push(next)
+      roomRepo.set(data.id, data)
+      const { io, emit } = ioMock()
+
+      await playTrackInRoom(io as never, data.id, next)
+      if (action === 'pause') pauseTrack(io as never, data.id)
+      if (action === 'seek') seekTrack(io as never, data.id, 20)
+      if (action === 'resume') resumeTrack(io as never, data.id)
+      vi.advanceTimersByTime(100)
+      expect(data.currentTrack?.id).toBe(track.id)
+      expect(emit.mock.calls.some(([event]) => event === EVENTS.ROOM_LIST_UPDATE)).toBe(false)
+
+      vi.advanceTimersByTime(300)
+      expect(data.currentTrack?.id).toBe(next.id)
+      expect(emit).toHaveBeenCalledWith(EVENTS.ROOM_LIST_UPDATE, [expect.objectContaining({ currentTrackTitle: 'Next song' })])
+    },
+  )
+
+  it('does not publish a song whose scheduled start was cancelled', async () => {
+    vi.useFakeTimers()
+    const data = room()
+    const cancelled = { ...track, id: 'cancelled', title: 'Cancelled' }
+    data.queue.push(cancelled)
+    roomRepo.set(data.id, data)
+    const { io, emit } = ioMock()
+    await playTrackInRoom(io as never, data.id, cancelled)
+    stopPlayback(io as never, data.id)
+    vi.advanceTimersByTime(400)
+    const updates = emit.mock.calls.filter(([event]) => event === EVENTS.ROOM_LIST_UPDATE)
+    expect(updates).toHaveLength(1)
+    expect(updates[0][1]).toEqual([expect.objectContaining({ currentTrackTitle: null })])
+  })
 })
 
 describe('playerService state transitions', () => {
